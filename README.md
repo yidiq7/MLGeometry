@@ -1,4 +1,4 @@
-### MLGeometry
+# MLGeometry
 
 Higher dimensional computational geometry using machine learning software 
 
@@ -6,7 +6,7 @@ Higher dimensional computational geometry using machine learning software
 
 More to come.
 
-# Requirements
+## Requirements
 
 numpy >= 1.18.5 \
 sympy >= 1.6.1   \
