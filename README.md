@@ -17,4 +17,4 @@ An older version may cause unexpected bugs.
 ## Sample jupyter notebook
 
 
-## Leaderboard
+## [Leaderboard](https://github.com/yidiq7/MLGeometry/edit/master/Leaderboard.md)
