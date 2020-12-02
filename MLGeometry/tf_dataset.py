@@ -29,7 +29,7 @@ def dataset_on_patch(patch):
 
     # The Kahler metric calculated by complex_hessian will include the derivative of the norm_coordinate, 
     # here we transform the restriction so that the corresponding column and row will be ignored in the hessian
-    trans_mat = np.delete(np.identity(patch.dimensions), patch.norm_coordinate, axis=0)
+    trans_mat = np.delete(np.identity(patch.degree), patch.norm_coordinate, axis=0)
     trans_tensor = tf.convert_to_tensor(np.array(trans_mat, dtype=np.complex64))
     restriction = tf.matmul(patch.r_tf, trans_tensor) 
 

@@ -5,15 +5,19 @@ from multiprocessing import Pool
 import time
 import tensorflow as tf
 
+__all__ = ['Hypersurface', 'diff', 'diff_conjugate']
+
 class Hypersurface():
     """ 
-    Numerically defined as a collection of points on a hypersurface. The points
-    are sperated into patches, which are also collectons of points. Therefore,
-    recursively, the patches can also be represented by instances of Hypersurface. 
+    The Hypersuface class contains the symbolic polynomial representation of a 
+    hypersurface in sympy. It is also numerically defined as a collection of 
+    points on the hypersurface. The points are sperated into patches, which are
+    also collectons of points. Therefore, recursively, the patches can also be 
+    defined as instances of the Hypersurface class. 
 
                            Hypersurface
                            /     |     \
-                       patch   patch    ...  (Also Hypersurface class)
+                      patch1   patch2  patch3   (Also Hypersurface class)
                       /  |  \  / | \   / | \
                subpatch ..  ..  .. ..   .. .. 
 
@@ -27,23 +31,31 @@ class Hypersurface():
           A function of the homogeneous coordiantes, e.g.
           f = z0**5 + z1**5 + z2**5 + z3**5 + z4**5 + 0.5*z0*z1*z2*z3*z4 
           The hypersurface is defined by f = 0
-        dimensions:
-  #### Need to change this to degree
-          The number of homogeneous coordiantes, not the dimensions of the
-          hypersurface.
+        degree:
+          The number of homogeneous coordiantes.
         norm_coordinate:
-          Applicable if the instance is a patch. An integer reprents the
-          index of the coordiante set to 1 on the affine patch. The 
-          corresponding coordiante is self.coordiante[self.norm_coordiante]
-          
-        
+          Applicable if the instance is a patch. An integer representing the
+          index of the coordinate set to 1 on the affine patch. The first level 
+          of patches are defined with this coordinate. The corresponding symbolic 
+          coordinate is self.coordiante[self.norm_coordiante].
+        affine_coordinates:
+          The coordiantes on the affine patches (withouth the norm_coordinate). 
+        max_grad_coordinate:
+          The index of the affine coordinate with the largest ∂f/∂z_i. The second
+          level of patches (subpatches) are defined using this coordinate, so that 
+          when one computes the holomorphic n-form
+          Omega = 1/(∂f/∂z_i) * (dz_1 ^ ... dz_{i-1} ^ dz_{i+1} ^ ... dz_N),
+          it is less likely to have a small number on the denominator.
+          The corresponding symbolic coordinate is 
+          self.affine_coordinate[self.max_grad_coordinate].
+ 
     """
     def __init__(self, coordinates, function,
                  n_pairs=0, points=None, norm_coordinate=None,
                  max_grad_coordinate=None):
         self.coordinates = np.array(coordinates)
         self.function = function
-        self.dimensions = len(self.coordinates)
+        self.degree = len(self.coordinates)
         self.norm_coordinate = norm_coordinate
         self.max_grad_coordinate = max_grad_coordinate
         # Range 0 to n-2, this works only on subpatches where max grad is calculated
@@ -56,22 +68,23 @@ class Hypersurface():
         self.indices = []
         if points is None:
             self.points = self.__solve_points(n_pairs)
-            #self.points = self.__generate_CPN(n_pairs)
             self.__autopatch()
         else:
             self.points = points
         self.n_points = len(self.points)
         self.n_patches = len(self.patches)
-        self.initialize_basic_properties()
+        self.__initialize_basic_properties()
     
-    def initialize_basic_properties(self):
-        # This function is necessary because those variables need to be updated on
-        # the projective patches after subpatches are created. Then this function will
-        # be reinvoked.
+    def __initialize_basic_properties(self):
+        """
+        It is necessary to create a separate function for those variables, 
+        so that they can be updated on the projective patches after subpatches are created.
+        In this case this function should be reinvoked in the last step. 
+        """
         self.grad = self.get_grad()
         self.hol_n_form = self.get_hol_n_form()
         #self.omega_omegabar = self.get_omega_omegabar()
-        #self.sections, self.n_sections = self.get_sections(self.dimensions)
+        #self.sections, self.n_sections = self.get_sections(self.degree)
         #self.FS_Metric = self.get_FS()
         #self.transition_function = self.__get_transition_function()
 
@@ -88,7 +101,7 @@ class Hypersurface():
         print("Number of Patches:", len(self.patches))
         i = 1
         for patch in self.patches:
-            print("Points in patch", i, ":", len(patch.points))
+            print("Points on patch", i, ":", len(patch.points))
             i = i + 1
 
     def normalize_point(self, point, norm_coordinate):
@@ -115,7 +128,7 @@ class Hypersurface():
                 for expr in np.nditer(expr_array, flags=['refs_ok']):
                     expr = expr.item(0)
                     expr = expr.subs([(self.coordinates[i], point[i])
-                                      for i in range(self.dimensions)])
+                                      for i in range(self.degree)])
                     expr_evaluated.append(sp.simplify(expr))
                 expr_array_evaluated.append(expr_evaluated)
         else:
@@ -203,19 +216,19 @@ class Hypersurface():
         for i in range(n_pairs):
             zv = []
             for j in range(2):
-                zv.append([complex(c[0],c[1]) for c in np.random.normal(0.0, 1.0, (self.dimensions, 2))])
+                zv.append([complex(c[0],c[1]) for c in np.random.normal(0.0, 1.0, (self.degree, 2))])
             z_random_pair.append(zv)
         return z_random_pair
 
     def __generate_CPN(self, n_points):
         z_random = []
         for i in range(n_points):
-            z_random.append([complex(c[0],c[1]) for c in np.random.normal(0.0, 1.0, (self.dimensions, 2))])
+            z_random.append([complex(c[0],c[1]) for c in np.random.normal(0.0, 1.0, (self.degree, 2))])
         return z_random
 
     @staticmethod
     def solve_poly(zpair, coeff):
-        # For each zpair there are d solutions, where d is the dimensions
+        # For each zpair there are d solutions, where d is the degree
         points_d = []
         c_solved = polyroots(coeff) 
         for pram_c in c_solved:
@@ -226,13 +239,13 @@ class Hypersurface():
     def __solve_points(self, n_pairs):
         points = []
         zpairs = self.__generate_random_pair(n_pairs)
-        coeff_a = [sp.symbols('a'+str(i)) for i in range(self.dimensions)]
-        coeff_b = [sp.symbols('b'+str(i)) for i in range(self.dimensions)]
+        coeff_a = [sp.symbols('a'+str(i)) for i in range(self.degree)]
+        coeff_b = [sp.symbols('b'+str(i)) for i in range(self.degree)]
         c = sp.symbols('c')
         coeff_zip = zip(coeff_a, coeff_b)
         line = [c*a+b for (a, b) in coeff_zip]
         function_eval = self.function.subs([(self.coordinates[i], line[i])
-                                            for i in range(self.dimensions)])
+                                            for i in range(self.degree)])
         poly = sp.Poly(function_eval, c)
         coeff_poly = poly.coeffs()
         get_coeff = sp.lambdify([coeff_a, coeff_b], coeff_poly)
@@ -247,36 +260,36 @@ class Hypersurface():
     def __autopatch(self):
         self.reset_patchwork()
         # projective patches
-        points_on_patch = [[] for i in range(self.dimensions)]
+        points_on_patch = [[] for i in range(self.degree)]
         for point in self.points:
             norms = np.absolute(point)
-            for i in range(self.dimensions):
+            for i in range(self.degree):
                 if norms[i] == max(norms):
                     point_normalized = self.normalize_point(point, i)
                     points_on_patch[i].append(point_normalized)
                     continue
-        for i in range(self.dimensions):
+        for i in range(self.degree):
             self.set_patch(points_on_patch[i], i)
         # Subpatches on each patch
         for patch in self.patches:
-            points_on_patch = [[] for i in range(self.dimensions-1)]
+            points_on_patch = [[] for i in range(self.degree-1)]
             grad_eval = sp.lambdify(self.coordinates, patch.grad, 'numpy')
             for point in patch.points:
                 grad = grad_eval(*point)
                 grad_norm = np.absolute(grad)
-                for i in range(self.dimensions-1):
+                for i in range(self.degree-1):
                     if grad_norm[i] == max(grad_norm):
                         points_on_patch[i].append(point)
                         patch.indices.append(i)
                         continue
-            for i in range(self.dimensions-1):
+            for i in range(self.degree-1):
                 patch.set_patch(points_on_patch[i], patch.norm_coordinate,
                                 max_grad_coord=i)
             # Reinitialize the affine patches after generating subpatches
-            patch.initialize_basic_properties()
+            patch.__initialize_basic_properties()
 
     def get_FS(self):
-        FS_metric = self.kahler_metric(np.identity(self.dimensions), k=1)
+        FS_metric = self.kahler_metric(np.identity(self.degree), k=1)
         return FS_metric
 
     def get_grad(self):
@@ -419,7 +432,7 @@ class Hypersurface():
                 # k = 1 will be used in the mass formula during the integration
                 s = [point]
                 # Delete the correspoding row
-                J = np.delete(np.identity(self.dimensions), self.norm_coordinate, 0)
+                J = np.delete(np.identity(self.degree), self.norm_coordinate, 0)
             else:
                 s = [self.sections(point)]
                 J = self.sections_jacobian(point).T
@@ -458,7 +471,7 @@ class Hypersurface():
         if isinstance(h_matrix, str):
             if h_matrix == 'identity':
                 if k == 1:
-                    h_matrix = np.identity(self.dimensions, dtype=np.complex64)
+                    h_matrix = np.identity(self.degree, dtype=np.complex64)
                 else:
                     h_matrix = np.identity(self.n_sections, dtype=np.complex64)
             elif h_matrix == 'FS':
