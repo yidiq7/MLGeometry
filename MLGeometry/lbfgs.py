@@ -58,6 +58,7 @@ def function_factory(model, loss, points, Omega_Omegabar, mass, restriction):
     part = tf.constant(part)
 
     @tf.function
+    @tf.autograph.experimental.do_not_convert
     def assign_new_model_parameters(params_1d):
         """A function updating the model's parameters with a 1D tf.Tensor.
 
