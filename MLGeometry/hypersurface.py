@@ -54,8 +54,6 @@ class Hypersurface():
     n_patches: The total number of subpatches a patch contains. 
     n_points: The total number of points on the hypersurface or a patch. 
     grad: A list of symbolic expressions of ∂f/∂z_i       
-    hol_n_form: 
-        A list of symbolic expressions of the holomorphic n-form 1/(∂f/∂z_i)         
 
     Usage:
     ----------
@@ -81,11 +79,10 @@ class Hypersurface():
                  max_grad_coordinate=None):
         """Initialize the hypersurface
        
-        Given the sympy coordinates Z, function f and npairs, there are three
-        steps on the highest level:  
+        Given the sympy coordinates Z, function f and npairs, there are two
+        main steps on the highest level:  
         1. Generate points using Monte Carlo methods with __solve_points()
         2. Define the patches automatically with __autopatch()
-        3. Initialize other properties with __ini_properties()
         On the patches, the points are calculated with __autopatch() 
         beforehand and passed an argument. 
 
@@ -108,23 +105,7 @@ class Hypersurface():
             self.points = points
         self.n_patches = len(self.patches)
         self.n_points = len(self.points)
-        self.grad = self.get_grad()
-        self.__init_properties()
-
-    def __init_properties(self):
-        """Initialize properties after the patches are created
-        
-        In the patchwork method __autopatch(), the subpatches are defined after
-        the initialization of the first level patches. So if you want to define
-        a variable as a list of variables on the subpatches, you need to put 
-        the initialization here and reinvoke this function at the end of 
-        __autopatch() to update the list.
-
-        For example, hol_n_form on the first level patch is defined as a list of
-        [Omega1, Omega2, Omega3].
-
-        """
-        self.hol_n_form = self.get_hol_n_form()
+        self.grad = self.__get_grad()
 
     def __solve_points(self, n_pairs):
         """Generates random points on the hypersurface with Monte Carlo
@@ -213,8 +194,6 @@ class Hypersurface():
             for i in range(self.degree-1):
                 patch.set_patch(points_on_patch[i], patch.norm_coordinate,
                                 max_grad_coord=i)
-            # Reinitialize the affine patches after generating subpatches
-            patch.__init_properties()
 
     def set_patch(self, points_on_patch, norm_coord=None, max_grad_coord=None):
         new_patch = Hypersurface(self.coordinates, 
@@ -238,12 +217,6 @@ class Hypersurface():
             coordinate_normalized = coordinate / norm_coefficient
             point_normalized.append(coordinate_normalized)
         return point_normalized
-
-    def eval(self, expr, point):
-        f = sp.lambdify(self.coordinates, expr)
-        expr_evaluated = f(*point)
-        return expr_evaluated
-
 
     def eval_all(self, expr_name):
         #expr_array = np.array(getattr(self, expr_name))
@@ -340,30 +313,33 @@ class Hypersurface():
         FS_metric = self.kahler_metric(np.identity(self.degree), k=1)
         return FS_metric
 
-    def get_grad(self):
+    def __get_grad(self):
         grad = []
         for coord in self.affine_coordinates:
             grad_i = self.function.diff(coord)
             grad.append(grad_i)
         return grad
 
-    def get_hol_n_form(self):
+    def get_hol_n_form(self, coord):
+        """
+
+        Return:
+        -------
+        A or a list of symbolic expressions of the holomorphic n-form 1/(∂f/∂z_i)
+
+        """
         hol_n_form = []
-        # The later condition is neccessary due to the initialization
-        if self.patches == [] and self.max_grad_coordinate is not None:
-            hol_n_form = 1 / self.grad[self.max_grad_coordinate]
+        if coord is not None:
+            hol_n_form = 1 / self.grad[coord]
         else:
-            for patch in self.patches:
-                try:
-                    hol_n_form.append(patch.hol_n_form)
-                except AttributeError:
-                    hol_n_form.append(patch.get_hol_n_form())
+            for i in range(len(self.affine_coordinates)):
+                hol_n_form.append(self.get_hol_n_form(i))
         return hol_n_form
 
     def get_omega_omegabar(self, lambdify=False):
         omega_omegabar = []
         if self.patches == [] and self.max_grad_coordinate is not None:
-            hol_n_form = self.hol_n_form
+            hol_n_form = self.get_hol_n_form(self.max_grad_coordinate)
             omega_omegabar = hol_n_form * sp.conjugate(hol_n_form)
         else:
             for patch in self.patches:
@@ -613,5 +589,4 @@ def diff(expr, coordinate):
     expr_diff = expr.subs(sp.conjugate(coordinate), coord_bar).diff(coordinate)
     expr_diff = expr_diff.subs(coord_bar, sp.conjugate(coordinate))
     return expr_diff
-
 
