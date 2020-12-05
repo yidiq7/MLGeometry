@@ -33,7 +33,7 @@ class Hypersurface():
         A function of the homogeneous coordiantes, e.g.
         f = z0**5 + z1**5 + z2**5 + z3**5 + z4**5 + 0.5*z0*z1*z2*z3*z4 
         The hypersurface is defined by f = 0
-    degree: The number of homogeneous coordiantes.
+    n_dim: The number of homogeneous coordiantes.
     norm_coordinate:
         Applicable if the instance is a patch. An integer representing the
         index of the coordinate set to 1 on the affine patch. The first level 
@@ -42,9 +42,9 @@ class Hypersurface():
     affine_coordinates:
         The coordiantes on the affine patches (withouth the norm_coordinate). 
     max_grad_coordinate:
-        The index of the affine coordinate with the largest ∂f/∂z_i. The second
-        level of patches (subpatches) are defined using this coordinate, so 
-        that when one computes the holomorphic n-form
+        The index of the affine coordinate with the largest |∂f/∂z_i|. The 
+        second level of patches (subpatches) are defined using this coordinate,
+        so that when one computes the holomorphic n-form
         Omega = 1/(∂f/∂z_i) * (dz_1 ^ ... dz_{i-1} ^ dz_{i+1} ^ ... dz_N),
         it is less likely to have a small number on the denominator.
         The corresponding symbolic coordinate is 
@@ -89,7 +89,7 @@ class Hypersurface():
         """
         self.coordinates = np.array(coordinates)
         self.function = function
-        self.degree = len(self.coordinates)
+        self.n_dim = len(self.coordinates)
         self.norm_coordinate = norm_coordinate
         if norm_coordinate is not None:
             self.affine_coordinates = np.delete(self.coordinates, norm_coordinate)
@@ -97,7 +97,6 @@ class Hypersurface():
             self.affine_coordinates = self.coordinates
         self.max_grad_coordinate = max_grad_coordinate
         self.patches = []
-        #self.indices = []
         if points is None:
             self.points = self.__solve_points(n_pairs)
             self.__autopatch()
@@ -124,13 +123,13 @@ class Hypersurface():
         """ 
         points = []
         zpairs = self.__generate_random_pair(n_pairs)
-        coeff_a = [sp.symbols('a'+str(i)) for i in range(self.degree)]
-        coeff_b = [sp.symbols('b'+str(i)) for i in range(self.degree)]
+        coeff_a = [sp.symbols('a'+str(i)) for i in range(self.n_dim)]
+        coeff_b = [sp.symbols('b'+str(i)) for i in range(self.n_dim)]
         c = sp.symbols('c')
         coeff_zip = zip(coeff_a, coeff_b)
         line = [c*a+b for (a, b) in coeff_zip]
         function_eval = self.function.subs([(self.coordinates[i], line[i])
-                                            for i in range(self.degree)])
+                                            for i in range(self.n_dim)])
         poly = sp.Poly(function_eval, c)
         coeff_poly = poly.coeffs()
         get_coeff = sp.lambdify([coeff_a, coeff_b], coeff_poly)
@@ -147,19 +146,19 @@ class Hypersurface():
         for i in range(n_pairs):
             zv = []
             for j in range(2):
-                zv.append([complex(c[0],c[1]) for c in np.random.normal(0.0, 1.0, (self.degree, 2))])
+                zv.append([complex(c[0],c[1]) for c in np.random.normal(0.0, 1.0, (self.n_dim, 2))])
             z_random_pair.append(zv)
         return z_random_pair
 
     def __generate_CPN(self, n_points):
         z_random = []
         for i in range(n_points):
-            z_random.append([complex(c[0],c[1]) for c in np.random.normal(0.0, 1.0, (self.degree, 2))])
+            z_random.append([complex(c[0],c[1]) for c in np.random.normal(0.0, 1.0, (self.n_dim, 2))])
         return z_random
 
     @staticmethod
     def solve_poly(zpair, coeff):
-        # For each zpair there are d solutions, where d is the degree
+        # For each zpair there are d solutions, where d is the n_dim
         points_d = []
         c_solved = mpmath.polyroots(coeff) 
         for pram_c in c_solved:
@@ -169,29 +168,28 @@ class Hypersurface():
     
     def __autopatch(self):
         # projective patches
-        points_on_patch = [[] for i in range(self.degree)]
+        points_on_patch = [[] for i in range(self.n_dim)]
         for point in self.points:
             norms = np.absolute(point)
-            for i in range(self.degree):
+            for i in range(self.n_dim):
                 if norms[i] == max(norms):
                     point_normalized = self.normalize_point(point, i)
                     points_on_patch[i].append(point_normalized)
                     continue
-        for i in range(self.degree):
+        for i in range(self.n_dim):
             self.set_patch(points_on_patch[i], i)
         # Subpatches on each patch
         for patch in self.patches:
-            points_on_patch = [[] for i in range(self.degree-1)]
+            points_on_patch = [[] for i in range(self.n_dim-1)]
             grad_eval = sp.lambdify(self.coordinates, patch.grad, 'numpy')
             for point in patch.points:
                 grad = grad_eval(*point)
                 grad_norm = np.absolute(grad)
-                for i in range(self.degree-1):
+                for i in range(self.n_dim-1):
                     if grad_norm[i] == max(grad_norm):
                         points_on_patch[i].append(point)
-                        #patch.indices.append(i)
                         continue
-            for i in range(self.degree-1):
+            for i in range(self.n_dim-1):
                 patch.set_patch(points_on_patch[i], patch.norm_coordinate,
                                 max_grad_coord=i)
 
@@ -217,24 +215,6 @@ class Hypersurface():
             coordinate_normalized = coordinate / norm_coefficient
             point_normalized.append(coordinate_normalized)
         return point_normalized
-
-    def eval_all(self, expr_name):
-        #expr_array = np.array(getattr(self, expr_name))
-        expr_array = np.array(expr_name)
-        expr_array_evaluated = []
-        if self.patches == []:
-            for point in self.points:
-                expr_evaluated = []
-                for expr in np.nditer(expr_array, flags=['refs_ok']):
-                    expr = expr.item(0)
-                    expr = expr.subs([(self.coordinates[i], point[i])
-                                      for i in range(self.degree)])
-                    expr_evaluated.append(sp.simplify(expr))
-                expr_array_evaluated.append(expr_evaluated)
-        else:
-            for patch in self.patches:
-                expr_array_evaluated.append(patch.eval_all(expr_name))
-        return expr_array_evaluated
 
     def sum_on_patch(self, f, numerical, tensor):
         summation = 0
@@ -305,12 +285,10 @@ class Hypersurface():
             norm_factor = 1 / self.n_points
 
         integration = summation * norm_factor
-        #if tensor is True:
-        #    integration = integration.numpy()
         return integration
 
     def get_FS(self):
-        FS_metric = self.kahler_metric(np.identity(self.degree), k=1)
+        FS_metric = self.kahler_metric(np.identity(self.n_dim), k=1)
         return FS_metric
 
     def __get_grad(self):
@@ -458,7 +436,7 @@ class Hypersurface():
                 # k = 1 will be used in the mass formula during the integration
                 s = [point]
                 # Delete the correspoding row
-                J = np.delete(np.identity(self.degree), self.norm_coordinate, 0)
+                J = np.delete(np.identity(self.n_dim), self.norm_coordinate, 0)
             else:
                 s = [self.sections(point)]
                 J = self.sections_jacobian(point).T
@@ -484,8 +462,6 @@ class Hypersurface():
         for point in self.points:
             r.append(self.restriction(point).T)
         r_tf = tf.constant(np.array(r, dtype=np.complex64))  
-        #r_tf = tf.convert_to_tensor(r, dtype=tf.complex64)  
-        #r_tf = tf.convert_to_tensor(r)  
         return r_tf
 
     #@tf.function
@@ -493,7 +469,7 @@ class Hypersurface():
         if isinstance(h_matrix, str):
             if h_matrix == 'identity':
                 if k == 1:
-                    h_matrix = np.identity(self.degree, dtype=np.complex64)
+                    h_matrix = np.identity(self.n_dim, dtype=np.complex64)
                 else:
                     h_matrix = np.identity(self.n_sections, dtype=np.complex64)
             elif h_matrix == 'FS':

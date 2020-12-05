@@ -3,15 +3,17 @@ import numpy as np
 
 __all__ = ['generate_dataset', 'dataset_on_patch']
 
-def generate_dataset(HS):
+def generate_dataset(patch):
     dataset = None
-    for patch in HS.patches:
+    if patch.patches == []:
+        dataset = dataset_on_patch(patch) 
+    else:
         for subpatch in patch.patches:
-            new_dataset = dataset_on_patch(subpatch)
-            if dataset is None:
+            new_dataset = generate_dataset(subpatch) 
+            if dataset is None: 
                 dataset = new_dataset
             else:
-                dataset = dataset.concatenate(new_dataset)
+                dataset = dataset.concatenate(new_dataset)   
     return dataset
 
 def dataset_on_patch(patch):
@@ -33,7 +35,7 @@ def dataset_on_patch(patch):
     # The Kahler metric calculated by complex_hessian includes the derivative of 
     # the norm_coordinate. Here the restriction is linear transformed so that 
     # the corresponding column and row will be ignored in the hessian.
-    trans_mat = np.delete(np.identity(patch.degree), patch.norm_coordinate, axis=0)
+    trans_mat = np.delete(np.identity(patch.n_dim), patch.norm_coordinate, axis=0)
     trans_tensor = tf.convert_to_tensor(np.array(trans_mat, dtype=np.complex64))
     restriction = tf.matmul(patch.r_tf, trans_tensor) 
 
