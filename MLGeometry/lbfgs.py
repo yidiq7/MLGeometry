@@ -2,9 +2,6 @@
 # -*- coding: utf-8 -*-
 # vim:fenc=utf-8
 #
-# Originally written by Pi-Yueh Chuang <pychuang@gwu.edu>
-# Some parts were manipulated for the Calabi-Yau metrics problem.     
-#
 # Distributed under terms of the MIT license.
 
 """An example of using tfp.optimizer.lbfgs_minimize to optimize a TensorFlow model.
