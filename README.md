@@ -16,7 +16,7 @@ An older version may cause unexpected bugs.
 
 tensorflow\_probablity is also required for the L-BFGS optimizer.
 
-## Sample jupyter notebook
+## [Sample jupyter notebook](https://github.com/yidiq7/MLGeometry/edit/master/Guide.ipynb)
 
 
 ## [Leaderboard](https://github.com/yidiq7/MLGeometry/edit/master/Leaderboard.md)
