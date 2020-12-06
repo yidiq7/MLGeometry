@@ -148,10 +148,10 @@ def cal_total_loss(dataset, loss_function):
     total_loss = 0
     total_mass = 0
 
-    for step, (points, omega_omegabar, mass, restriction) in enumerate(dataset):
-        omega = volume_form(points, omega_omegabar, mass, restriction)
+    for step, (points, Omega_Omegabar, mass, restriction) in enumerate(dataset):
+        det_omega = volume_form(points, Omega_Omegabar, mass, restriction)
         mass_sum = tf.reduce_sum(mass)
-        total_loss += loss_function(omega_omegabar, omega, mass) * mass_sum
+        total_loss += loss_function(Omega_Omegabar, det_omega, mass) * mass_sum
         total_mass += mass_sum
     total_loss = total_loss / total_mass
 
@@ -162,9 +162,9 @@ def cal_max_error(dataset):
     find max|eta - 1| over the whole dataset: calculate the error on each batch then compare.
     '''
     max_error_tmp = 0
-    for step, (points, omega_omegabar, mass, restriction) in enumerate(dataset):
-        omega = volume_form(points, omega_omegabar, mass, restriction)
-        error = mlg.loss.max_error(omega_omegabar, omega, mass).numpy()
+    for step, (points, Omega_omegabar, mass, restriction) in enumerate(dataset):
+        det_omega = volume_form(points, Omega_Omegabar, mass, restriction)
+        error = mlg.loss.max_error(Omega_Omegabar, det_omega, mass).numpy()
         if error > max_error_tmp:
             max_error_tmp = error
 
@@ -176,10 +176,14 @@ if args.optimizer.lower() == 'lbfgs':
     # iter+1 everytime f is evoked, which will also be invoked when calculationg the hessian, etc
     # So the true max_epochs will be 3 times user's input
     max_epochs = int(max_epochs/3)
-    for step, (points, omega_omegabar, mass, restriction) in enumerate(train_set):
-        train_func = mlg.lbfgs.function_factory(model, loss_func, points, omega_omegabar, mass, restriction)
+    points, Omega_Omegabar, mass, restriction = next(iter(train_set))
+    train_func = mlg.lbfgs.function_factory(model, loss_func, points, Omega_Omegabar, mass, restriction)
+
     init_params = tf.dynamic_stitch(train_func.idx, model.trainable_variables)
-    results = tfp.optimizer.lbfgs_minimize(value_and_gradients_function=train_func, initial_position=init_params, max_iterations=max_epochs, num_correction_pairs=args.num_correction_pairs)
+    results = tfp.optimizer.lbfgs_minimize(value_and_gradients_function=train_func,
+                                           initial_position=init_params,
+                                           max_iterations=max_epochs,
+                                           num_correction_pairs=args.num_correction_pairs)
     train_func.assign_new_model_parameters(results.position)
 
 else:
@@ -207,8 +211,8 @@ else:
         for step, (points, Omega_Omegabar, mass, restriction) in enumerate(train_set):
             with tf.GradientTape() as tape:
             
-                omega = volume_form(points, Omega_Omegabar, mass, restriction)
-                loss = loss_func(Omega_Omegabar, omega, mass)  
+                det_omega = volume_form(points, Omega_Omegabar, mass, restriction)
+                loss = loss_func(Omega_Omegabar, det_omega, mass)  
                 grads = tape.gradient(loss, model.trainable_weights)
                 if clip_threshold is not None:
                     grads = [tf.clip_by_value(grad, -clip_threshold, clip_threshold) for grad in grads]

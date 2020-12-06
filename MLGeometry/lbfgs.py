@@ -2,7 +2,8 @@
 # -*- coding: utf-8 -*-
 # vim:fenc=utf-8
 #
-# Copyright © 2019 Pi-Yueh Chuang <pychuang@gwu.edu>
+# Originally written by Pi-Yueh Chuang <pychuang@gwu.edu>
+# Some parts were manipulated for the Calabi-Yau metrics problem.     
 #
 # Distributed under terms of the MIT license.
 
@@ -101,8 +102,8 @@ def function_factory(model, loss, points, Omega_Omegabar, mass, restriction):
             # update the parameters in the model
             assign_new_model_parameters(params_1d)
             # calculate the loss
-            omega = volume_form(points, Omega_Omegabar, mass, restriction)
-            loss_value = loss(Omega_Omegabar, omega, mass)
+            det_omega = volume_form(points, Omega_Omegabar, mass, restriction)
+            loss_value = loss(Omega_Omegabar, det_omega, mass)
 
         # calculate gradients and convert to 1D tf.Tensor
         grads = tape.gradient(loss_value, model.trainable_variables)
