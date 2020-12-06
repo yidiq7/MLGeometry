@@ -14,6 +14,8 @@ tensorflow >= 2.3.0
 
 An older version may cause unexpected bugs.
 
+tensorflow\_probablity is also required for the L-BFGS optimizer.
+
 ## Sample jupyter notebook
 
 
