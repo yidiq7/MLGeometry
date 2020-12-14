@@ -56,7 +56,7 @@ class threelayers(tf.keras.Model):
 
     def __init__(self, n_units):
         super(threelayers, self).__init__()
-        self.bihomogeneous = Bihomogeneous()
+        self.bihomogeneous = bnn.Bihomogeneous()
         self.layer1 = bnn.Dense(25, n_units[0], activation=tf.square)
         self.layer2 = bnn.Dense(n_units[0], n_units[1], activation=tf.square)
         self.layer3 = bnn.Dense(n_units[1], n_units[2], activation=tf.square)
