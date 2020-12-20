@@ -73,7 +73,8 @@ HS_test = mlg.hypersurface.Hypersurface(Z, f, n_pairs)
 train_set = mlg.tf_dataset.generate_dataset(HS)
 test_set = mlg.tf_dataset.generate_dataset(HS_test)
 
-if batch_size is None or args.optimizer.lower() == 'lbfgs':
+#if batch_size is None or args.optimizer.lower() == 'lbfgs':
+if batch_size is None:
     batch_size = HS.n_points
 
 train_set = train_set.shuffle(HS.n_points).batch(batch_size)
@@ -145,8 +146,8 @@ def volume_form(x, Omega_Omegabar, mass, restriction):
 
 def cal_total_loss(dataset, loss_function):
 
-    total_loss = 0
-    total_mass = 0
+    total_loss = tf.constant(0, dtype=tf.float32)
+    total_mass= tf.constant(0, dtype=tf.float32)
 
     for step, (points, Omega_Omegabar, mass, restriction) in enumerate(dataset):
         det_omega = volume_form(points, Omega_Omegabar, mass, restriction)
@@ -162,7 +163,7 @@ def cal_max_error(dataset):
     find max|eta - 1| over the whole dataset: calculate the error on each batch then compare.
     '''
     max_error_tmp = 0
-    for step, (points, Omega_omegabar, mass, restriction) in enumerate(dataset):
+    for step, (points, Omega_Omegabar, mass, restriction) in enumerate(dataset):
         det_omega = volume_form(points, Omega_Omegabar, mass, restriction)
         error = mlg.loss.max_error(Omega_Omegabar, det_omega, mass).numpy()
         if error > max_error_tmp:
@@ -176,8 +177,7 @@ if args.optimizer.lower() == 'lbfgs':
     # iter+1 everytime f is evoked, which will also be invoked when calculationg the hessian, etc
     # So the true max_epochs will be 3 times user's input
     max_epochs = int(max_epochs/3)
-    points, Omega_Omegabar, mass, restriction = next(iter(train_set))
-    train_func = mlg.lbfgs.function_factory(model, loss_func, points, Omega_Omegabar, mass, restriction)
+    train_func = mlg.lbfgs.function_factory(model, loss_func, train_set)
 
     init_params = tf.dynamic_stitch(train_func.idx, model.trainable_variables)
     results = tfp.optimizer.lbfgs_minimize(value_and_gradients_function=train_func,

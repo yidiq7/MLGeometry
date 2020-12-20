@@ -23,7 +23,7 @@ from . import complex_math
 
 __all__ = ['function_factory']
 
-def function_factory(model, loss, points, Omega_Omegabar, mass, restriction):
+def function_factory(model, loss, dataset):
     """A factory to create a function required by tfp.optimizer.lbfgs_minimize.
 
     Args:
@@ -81,7 +81,6 @@ def function_factory(model, loss, points, Omega_Omegabar, mass, restriction):
 
 
     # now create a function that will be returned by this factory
-    @tf.function
     def f(params_1d):
         """A function that can be used by tfp.optimizer.lbfgs_minimize.
 
@@ -95,25 +94,40 @@ def function_factory(model, loss, points, Omega_Omegabar, mass, restriction):
         """
 
         # use GradientTape so that we can calculate the gradient of loss w.r.t. parameters
-        with tf.GradientTape() as tape:
-            # update the parameters in the model
-            assign_new_model_parameters(params_1d)
-            # calculate the loss
-            det_omega = volume_form(points, Omega_Omegabar, mass, restriction)
-            loss_value = loss(Omega_Omegabar, det_omega, mass)
+        for step, (points, Omega_Omegabar, mass, restriction) in enumerate(dataset):
+            with tf.GradientTape() as tape:
+                # update the parameters in the model
+                assign_new_model_parameters(params_1d)
+                # calculate the loss
+                det_omega = volume_form(points, Omega_Omegabar, mass, restriction)
+                loss_value = loss(Omega_Omegabar, det_omega, mass)
 
-        # calculate gradients and convert to 1D tf.Tensor
-        grads = tape.gradient(loss_value, model.trainable_variables)
-        grads = tf.dynamic_stitch(idx, grads)
+            # calculate gradients and convert to 1D tf.Tensor
+            grads = tape.gradient(loss_value, model.trainable_variables)
+            grads = tf.dynamic_stitch(idx, grads)
+          
+            # reweight the loss and grads 
+            mass_sum = tf.reduce_sum(mass) 
+            try:
+                total_loss += loss_value * mass_sum 
+                total_grads += grads * mass_sum
+                total_mass += mass_sum
+            except NameError:
+                total_loss = loss_value * mass_sum 
+                total_grads = grads * mass_sum
+                total_mass = mass_sum
+
+        total_loss = total_loss / total_mass
+        total_grads = total_grads / total_mass
 
         # print out iteration & loss
         f.iter.assign_add(1)
-        tf.print("Iter:", f.iter, "loss:", loss_value)
+        tf.print("Iter:", f.iter, "loss:", total_loss)
 
         # store loss value so we can retrieve later
-        tf.py_function(f.history.append, inp=[loss_value], Tout=[])
+        tf.py_function(f.history.append, inp=[total_loss], Tout=[])
 
-        return loss_value, grads
+        return total_loss, total_grads
 
     # store these information as members so we can use them outside the scope
     f.iter = tf.Variable(0)
