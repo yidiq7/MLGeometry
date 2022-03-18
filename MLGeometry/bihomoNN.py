@@ -11,10 +11,10 @@ class Bihomogeneous(keras.layers.Layer):
     def __init__(self):
         super(Bihomogeneous, self).__init__()
         
-    def call(self, inputs):
+    def call(self, d=5, inputs):
         zzbar = tf.einsum('ai,aj->aij', inputs, tf.math.conj(inputs))
         zzbar = tf.linalg.band_part(zzbar, 0, -1)
-        zzbar = tf.reshape(zzbar, [-1, 25])
+        zzbar = tf.reshape(zzbar, [-1, d**2])
         zzbar = tf.concat([tf.math.real(zzbar), tf.math.imag(zzbar)], axis=1)
         return remove_zero_entries(zzbar)
         
