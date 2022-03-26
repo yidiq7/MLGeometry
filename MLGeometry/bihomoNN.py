@@ -11,7 +11,7 @@ class Bihomogeneous(keras.layers.Layer):
     def __init__(self):
         super(Bihomogeneous, self).__init__()
         
-    def call(self, d=5, inputs):
+    def call(self, inputs, d=5):
         zzbar = tf.einsum('ai,aj->aij', inputs, tf.math.conj(inputs))
         zzbar = tf.linalg.band_part(zzbar, 0, -1)
         zzbar = tf.reshape(zzbar, [-1, d**2])
