@@ -8,10 +8,10 @@ __all__ = ['Bihomogeneous','Bihomogeneous_k2','Bihomogeneous_k3',
 
 class Bihomogeneous(keras.layers.Layer):
     '''A layer transform zi to zi*zjbar'''
-    def __init__(self):
+    def __init__(self, d=5):
         super(Bihomogeneous, self).__init__()
         
-    def call(self, inputs, d=5):
+    def call(self, inputs):
         zzbar = tf.einsum('ai,aj->aij', inputs, tf.math.conj(inputs))
         zzbar = tf.linalg.band_part(zzbar, 0, -1)
         zzbar = tf.reshape(zzbar, [-1, d**2])
