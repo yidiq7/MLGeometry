@@ -14,24 +14,29 @@ More to come.
 
        conda install -c conda-forge notebook
        conda install -c conda-forge nb_conda_kernels
+       conda install -c conda-forge cudatoolkit=11.8.0
 
-3. Create the environment with necessary packages:
+
+4. Create the environment with necessary packages:
 
        conda create -n MLGeometry pip tensorflow-probability sympy matplotlib ipykernel
 
-4. Activate the environment and install Tensorflow:
+5. Activate the environment and install Tensorflow:
 
        conda activate MLGeometry
-       pip install tensorflow-gpu
+       python3 -m pip install nvidia-cudnn-cu11==8.6.0.163 tensorflow==2.12.*
+       mkdir -p $CONDA_PREFIX/etc/conda/activate.d
+       echo 'CUDNN_PATH=$(dirname $(python -c "import nvidia.cudnn;print(nvidia.cudnn.__file__)"))' >> $CONDA_PREFIX/etc/conda/activate.d/env_vars.sh
+       echo 'export LD_LIBRARY_PATH=$CONDA_PREFIX/lib/:$CUDNN_PATH/lib:$LD_LIBRARY_PATH' >> $CONDA_PREFIX/etc/conda/activate.d/env_vars.sh
+       source $CONDA_PREFIX/etc/conda/activate.d/env_vars.sh
 
-   Or if you do not have a GPU:
+6. Verify install:
+   
+       python3 -c "import tensorflow as tf; print(tf.config.list_physical_devices('GPU'))"
 
-       conda activate MLGeometry
-       pip install tensorflow
+7. Open Jupyter with `jupyter-notebook` in the command line, and change the kernel in Kernel -> Change kernel -> Python [conda env:MLGeometry]
 
-5. Open Jupyter with `jupyter-notebook` in the command line, and change the kernel in Kernel -> Change kernel -> Python [conda env:MLGeometry]
-
-6. Clone the repository
+8. Clone the repository
 
        git clone https://github.com/yidiq7/MLGeometry/
 
