@@ -4,7 +4,7 @@ import numpy as np
 import tensorflow as tf
 
 __all__ = ['Bihomogeneous','Bihomogeneous_k2','Bihomogeneous_k3',
-           'Bihomogeneous_k4','Dense','WidthOneDense']
+           'Bihomogeneous_k4','SquareDense','WidthOneDense']
 
 class Bihomogeneous(keras.layers.Layer):
     '''A layer transform zi to zi*zjbar'''
@@ -88,9 +88,9 @@ def remove_zero_entries(x):
     x = tf.transpose(x)
     return x
 
-class Dense(keras.layers.Layer):
+class SquareDense(keras.layers.Layer):
     def __init__(self, input_dim, units, activation=None, trainable=True):
-        super(Dense, self).__init__()
+        super(SquareDense, self).__init__()
         w_init = tf.random_normal_initializer(mean=0.0, stddev=0.05)
         self.w = tf.Variable(
             #initial_value=tf.math.abs(w_init(shape=(input_dim, units), dtype='float32')),
