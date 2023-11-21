@@ -31,7 +31,7 @@
 
 ### Removed
 
-- The n_patches attribute in the Hypersurface class since it failes on subpatches
+- The n_patches attribute in the Hypersurface class since it fails on subpatches
  
 ## [1.0.1] - 2020-12-20
 
