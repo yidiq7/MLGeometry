@@ -2,11 +2,12 @@
 
 from multiprocessing import Pool
 import mpmath
+
 import numpy as np
 import sympy as sp
 import tensorflow as tf
 
-__all__ = ['Hypersurface', 'diff', 'diff_conjugate']
+__all__ = ['Hypersurface', 'RealHypersurface', 'diff', 'diff_conjugate']
 
 class Hypersurface():
     """A hypersurface or patch defined both symbolically and numerically.   
@@ -81,8 +82,8 @@ class Hypersurface():
         Given the sympy coordinates Z, function f and npairs, there are two
         main steps on the highest level:  
         1. Generate points using Monte Carlo methods with __solve_points()
-        2. Define the patches automatically with __autopatch()
-        On the patches, the points are calculated with __autopatch() 
+        2. Define the patches automatically with autopatch()
+        On the patches, the points are calculated with autopatch() 
         beforehand and passed as an argument. 
 
         """
@@ -97,15 +98,15 @@ class Hypersurface():
         self.max_grad_coordinate = max_grad_coordinate
         self.patches = []
         if points is None:
-            self.points = self.__solve_points(n_pairs)
-            self.__autopatch()
+            self.points = self.solve_points(n_pairs)
+            self.autopatch()
         else:
             self.points = points
         #self.n_patches = len(self.patches)
         self.n_points = len(self.points)
-        self.grad = self.__get_grad()
+        self.grad = self.get_grad()
 
-    def __solve_points(self, n_pairs):
+    def solve_points(self, n_pairs):
         """Generates random points on the hypersurface with Monte Carlo
 
         #TODO explain the MC method or refer to the paper
@@ -120,8 +121,7 @@ class Hypersurface():
         themselves are a list of complex coordiantes with dtype Complex128.
 
         """ 
-        points = []
-        zpairs = self.__generate_random_pair(n_pairs)
+        zpairs = self.generate_random_projective(n_pairs, 2)
         coeff_a = [sp.symbols('a'+str(i)) for i in range(self.n_dim)]
         coeff_b = [sp.symbols('b'+str(i)) for i in range(self.n_dim)]
         c = sp.symbols('c')
@@ -132,6 +132,13 @@ class Hypersurface():
         poly = sp.Poly(function_eval, c)
         coeff_poly = poly.coeffs()
         get_coeff = sp.lambdify([coeff_a, coeff_b], coeff_poly)
+
+        points = self.solve_points_multiprocessing(zpairs, get_coeff)
+
+        return points
+
+    def solve_points_multiprocessing(self, zpairs, get_coeff):
+        points = []
         # Multiprocessing. Then append the points to the same list in the main process
         with Pool() as pool:
             for points_d in pool.starmap(Hypersurface.solve_poly,
@@ -140,19 +147,28 @@ class Hypersurface():
                 points.extend(points_d)
         return points
 
-    def __generate_random_pair(self, n_pairs):
-        z_random_pair = []
-        for i in range(n_pairs):
-            zv = []
-            for j in range(2):
-                zv.append([complex(c[0],c[1]) for c in np.random.normal(0.0, 1.0, (self.n_dim, 2))])
-            z_random_pair.append(zv)
-        return z_random_pair
+    def generate_random_projective(self, n_set, n_pt_in_a_set):
+        """Generate sets of points in CP^N
 
-    def __generate_CPN(self, n_points):
+        Args:
+        --------
+        n_set: The total number of sets/complex lines/planes sampled. Equivalent
+               to n_pairs when there are 2 points in each set.
+
+        n_pt_in_a_set: The number of points in a set. For pairs it equals to 2 and
+                       for trios it equal to 3, etc.
+
+        Returns:
+        --------
+        A list of random points in (CP^N)^n_point
+
+        """
         z_random = []
-        for i in range(n_points):
-            z_random.append([complex(c[0],c[1]) for c in np.random.normal(0.0, 1.0, (self.n_dim, 2))])
+        for i in range(n_set):
+            zv = []
+            for j in range(n_pt_in_a_set):
+                zv.append([complex(c[0],c[1]) for c in np.random.normal(0.0, 1.0, (self.n_dim, 2))])
+            z_random.append(zv)
         return z_random
 
     @staticmethod
@@ -165,7 +181,7 @@ class Hypersurface():
                              for (a, b) in zip(zpair[0], zpair[1])])
         return points_d
     
-    def __autopatch(self):
+    def autopatch(self):
         # projective patches
         points_on_patch = [[] for i in range(self.n_dim)]
         for point in self.points:
@@ -176,7 +192,8 @@ class Hypersurface():
                     points_on_patch[i].append(point_normalized)
                     continue
         for i in range(self.n_dim):
-            self.set_patch(points_on_patch[i], i)
+            if points_on_patch[i]:
+                self.set_patch(points_on_patch[i], i)
         # Subpatches on each patch
         for patch in self.patches:
             points_on_patch = [[] for i in range(self.n_dim-1)]
@@ -184,13 +201,11 @@ class Hypersurface():
             for point in patch.points:
                 grad = grad_eval(*point)
                 grad_norm = np.absolute(grad)
-                for i in range(self.n_dim-1):
-                    if grad_norm[i] == max(grad_norm):
-                        points_on_patch[i].append(point)
-                        continue
+                points_on_patch[np.argmax(grad_norm)].append(point)
             for i in range(self.n_dim-1):
-                patch.set_patch(points_on_patch[i], patch.norm_coordinate,
-                                max_grad_coord=i)
+                if points_on_patch[i]:
+                    patch.set_patch(points_on_patch[i], patch.norm_coordinate,
+                                    max_grad_coord=i)
 
     def set_patch(self, points_on_patch, norm_coord=None, max_grad_coord=None):
         new_patch = Hypersurface(self.coordinates, 
@@ -215,82 +230,11 @@ class Hypersurface():
             point_normalized.append(coordinate_normalized)
         return point_normalized
 
-    def sum_on_patch(self, f, numerical, tensor):
-        summation = 0
-        if self.patches == []:
-            if tensor is True:
-                summation = tf.reduce_sum(f(self))
-            else:
-                points = np.array(self.points)
-                if numerical is True:
-                    # Currying if numerical is true
-                    def f_patch(patch):
-                        def f_point(point):
-                            return f(patch, point) 
-                        return  f_point
-                    func = f_patch(self)
-
-                else:
-                    func = sp.lambdify([self.coordinates], f(self), "numpy") 
-
-                for point in self.points:
-                    value = func(point)
-                    summation += value
-
-                    #if np.absolute(value) < 5 and np.absolute(value) > -5:
-                    #    summation += value
-                    #else:
-                    #    print("Possible division of a small number:", value)
-        else:
-            for patch in self.patches:
-                summation += patch.sum_on_patch(f,numerical, tensor)
-
-        return summation
-
-    def integrate(self, f, holomorphic=True, numerical=False, tensor=False):
-        # f should be a lambda expression given by the user
-        # holomorphic=True means integrating over Omega_Omegabar
-        if tensor is True:
-            m = lambda patch: patch.Omega_Omegabar_tf / \
-                              patch.num_FS_volume_form_tf('identity', k=1)
-            weighted_f = lambda patch: f(patch) * m(patch)
-
-        elif numerical is True:
-
-            # m is the mass formula
-            def m(patch, point):
-                mass = patch.omega_omegabar(point) / \
-                       patch.num_FS_volume_form('identity', point, k=1)
-                return mass
-
-            def weighted_f(patch, point):
-                weighted_f = f(patch, point) * m(patch, point) 
-                return weighted_f
-        else:
-            m = lambda patch: patch.get_omega_omegabar() / \
-                              patch.get_FS_volume_form(k=1)
-            weighted_f = lambda patch: f(patch) * m(patch)
-
-        if holomorphic is True:
-            # Define a new f with an extra argument user_f and immediatly pass f as
-            # the default value, so that f can be updated as f(x) * m(x)
-            #f = lambda patch, user_f=f: user_f(patch) * m(patch)
-            #m = lambda patch: patch.get_omega_omegabar() / \
-            #    patch.get_FS_volume_form(k=1)
-            summation = self.sum_on_patch(weighted_f, numerical, tensor)
-            norm_factor = 1 / self.sum_on_patch(m, numerical, tensor)
-        else:
-            summation = self.sum_on_patch(f, numerical, tensor)
-            norm_factor = 1 / self.n_points
-
-        integration = summation * norm_factor
-        return integration
-
     def get_FS(self):
         FS_metric = self.kahler_metric(np.identity(self.n_dim), k=1)
         return FS_metric
 
-    def __get_grad(self):
+    def get_grad(self):
         grad = []
         for coord in self.affine_coordinates:
             grad_i = self.function.diff(coord)
@@ -354,6 +298,7 @@ class Hypersurface():
                 h_matrix = np.identity(n_sec)
             elif h_matrix == "symbolic":
                 h_matrix = sp.MatrixSymbol('H', n_sec, n_sec)
+
             elif h_matrix == "FS":
                 h_matrix = np.diag(sp.Poly(sp.expand(sum(self.coordinates)**k)).coeffs())
         z_H_zbar = np.matmul(sections, np.matmul(h_matrix, sp.conjugate(sections)))
@@ -457,6 +402,8 @@ class Hypersurface():
 
     #@tf.function
     def num_restriction_tf(self):
+        # Maybe I shouldn't do transpose here. A little bit confusing but
+        # I guarantee you that the calculations are correct
         r = []
         for point in self.points:
             r.append(self.restriction(point).T)
@@ -507,13 +454,6 @@ class Hypersurface():
         FS_volume_form = tf.math.real(FS_volume_form)
         return FS_volume_form
 
-    #@tf.function
-    def num_eta_tf(self, h_matrix):
-        FS_volume_form = self.num_FS_volume_form_tf(h_matrix)
-        Omega_Omegabar = self.Omega_Omegabar_tf
-        eta = FS_volume_form / Omega_Omegabar
-        return eta
-
     def num_kahler_metric(self, h_matrix, point, k=-1):
         if k == 1:
             # k = 1 will be used in the mass formula during the integration
@@ -547,12 +487,6 @@ class Hypersurface():
         FS_volume_form = np.linalg.det(FS_volume_form).real
         return FS_volume_form
 
-    def num_eta(self, h_matrix, point):
-        FS_volume_form = self.num_FS_volume_form(h_matrix, point)
-        Omega_Omegabar = self.omega_omegabar(point)
-        eta = FS_volume_form / Omega_Omegabar
-        return eta
-
 def diff_conjugate(expr, coordinate):
     coord_bar = sp.symbols('coord_bar')
     expr_diff = expr.subs(sp.conjugate(coordinate), coord_bar).diff(coord_bar)
@@ -565,3 +499,41 @@ def diff(expr, coordinate):
     expr_diff = expr_diff.subs(coord_bar, sp.conjugate(coordinate))
     return expr_diff
 
+
+class RealHypersurface(Hypersurface):
+
+    def generate_random_projective(self, n_set, n_pt_in_a_set):
+        z_random= []
+        for i in range(n_set):
+            zv = []
+            for j in range(n_pt_in_a_set):
+                zv.append(np.random.normal(0.0, 1.0, self.n_dim).astype(complex))
+            z_random.append(zv)
+        return z_random
+
+    def solve_points_multiprocessing(self, zpairs, get_coeff):
+        points = []
+        # Multiprocessing. Then append the points to the same list in the main process
+        with Pool() as pool:
+            for points_d in pool.starmap(RealHypersurface.solve_poly_real,
+                                         zip(zpairs, [get_coeff(zpair[0], zpair[1])
+                                                      for zpair in zpairs])):
+                points.extend(points_d)
+        return points
+
+
+    @staticmethod
+    def solve_poly_real(zpair, coeff):
+        # For each zpair there are d solutions, where d is the n_dim
+        # There will be one real solution and we will keep that only
+        points_d = []
+        try:
+            c_solved = mpmath.polyroots(coeff) 
+            for pram_c in c_solved:
+                if np.abs(np.imag(pram_c)) < 1e-8:
+                    points_d.append([complex(pram_c * a + b)
+                                     for (a, b) in zip(zpair[0], zpair[1])])
+        except:
+            pass
+        return points_d
+ 

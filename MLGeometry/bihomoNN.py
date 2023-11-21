@@ -89,15 +89,15 @@ def remove_zero_entries(x):
     return x
 
 class SquareDense(keras.layers.Layer):
-    def __init__(self, input_dim, units, activation=None, trainable=True):
+    def __init__(self, input_dim, units, activation=tf.square, trainable=True):
         super(SquareDense, self).__init__()
         w_init = tf.random_normal_initializer(mean=0.0, stddev=0.05)
         self.w = tf.Variable(
-            #initial_value=tf.math.abs(w_init(shape=(input_dim, units), dtype='float32')),
-            initial_value=w_init(shape=(input_dim, units), dtype='float32'),
+            initial_value=tf.math.abs(w_init(shape=(input_dim, units), dtype='float32')),
+            #initial_value=w_init(shape=(input_dim, units), dtype='float32'),
             trainable=trainable,
         )
-        self.activation =  activations.get(activation)
+        self.activation = activations.get(activation)
 
     def call(self, inputs):
         return self.activation(tf.matmul(inputs, self.w))
