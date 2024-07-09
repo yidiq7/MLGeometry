@@ -8,7 +8,7 @@ kPAIR_DIM = 50
 
 class u1_model_relu(tf.keras.Model):
 
-    def __init__(self, n_units, m_units):
+    def __init__(self, n_units, m_units, g_steps=8):
         super().__init__()
         assert len(n_units) > 0
         assert len(m_units) > 0
@@ -22,7 +22,7 @@ class u1_model_relu(tf.keras.Model):
             for i in range(len(n_units))
         ])
 
-        self.u1_layer = U1EquivariantLayer(inner_layers)
+        self.u1_layer = U1EquivariantLayer(inner_layers, g_steps=g_steps)
 
         self.outer_layers = tf.keras.Sequential([
             tf.keras.layers.Dense(

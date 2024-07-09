@@ -34,6 +34,7 @@ parser.add_argument('--alpha', type=float)
 
 parser.add_argument('--model_name', type=str, default='u1_model_relu')
 parser.add_argument('--layers', type=str, default='10-10_1')
+parser.add_argument('--g_steps', type=int, default=8) 
 parser.add_argument('--load_model')
 parser.add_argument('--save_dir')
 parser.add_argument('--save_name')
