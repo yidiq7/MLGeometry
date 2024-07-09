@@ -39,7 +39,8 @@ def dataset_on_patch(patch):
     trans_tensor = tf.convert_to_tensor(np.array(trans_mat, dtype=np.complex64))
     restriction = tf.matmul(patch.r_tf, trans_tensor) 
 
-    dataset = tf.data.Dataset.from_tensor_slices((x, y, mass, restriction))
+    FS_metric = patch.num_kahler_metric_tf('FS')
+    dataset = tf.data.Dataset.from_tensor_slices((x, y, mass, restriction, FS_metric))
 
     return dataset
 
