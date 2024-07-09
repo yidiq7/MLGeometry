@@ -487,8 +487,6 @@ class Hypersurface():
         FS_volume_form = np.linalg.det(FS_volume_form).real
         return FS_volume_form
 
-def diff_conjugate(expr, coordinate):
-    coord_bar = sp.symbols('coord_bar')
     expr_diff = expr.subs(sp.conjugate(coordinate), coord_bar).diff(coord_bar)
     expr_diff = expr_diff.subs(coord_bar, sp.conjugate(coordinate))
     return expr_diff
