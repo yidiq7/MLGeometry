@@ -1,11 +1,10 @@
 import tensorflow as tf
-from MLGeometry import bihomoNN as bnn
 from MLGeometry.u1equivariant import U1EquivariantLayer
 
 __all__ = ['u1_model']
 
-
-
+kINPUT_DIM = 10
+kPAIR_DIM = 50
 
 class u1_model_relu(tf.keras.Model):
 
@@ -14,20 +13,18 @@ class u1_model_relu(tf.keras.Model):
         assert len(n_units) > 0
         assert len(m_units) > 0
 
-        input_dim = 10
-
         inner_layers = tf.keras.Sequential([
             tf.keras.layers.Dense(
                 n_units[i],
-                input_shape=(None if i > 0 else (input_dim, )),
+                input_shape=((kINPUT_DIM, ) if i == 0 else None),
                 activation=('relu' if i < len(n_units) - 1 else None)
             )
             for i in range(len(n_units))
         ])
 
-        self.outer_u1_layers = tf.keras.Sequential([
-            U1EquivariantLayer(inner_layers)
-        ] + [
+        self.u1_layer = U1EquivariantLayer(inner_layers)
+
+        self.outer_layers = tf.keras.Sequential([
             tf.keras.layers.Dense(
                 m_units[i],
                 activation=('relu' if i < len(m_units) - 1 else None)
@@ -36,6 +33,12 @@ class u1_model_relu(tf.keras.Model):
         ])
 
     def call(self, inputs):
-        x = self.outer_u1_layers(inputs)
+        assert len(inputs.shape) == 3
+        ps, bs = inputs.shape[:2]
+        assert ps == kPAIR_DIM
+        x = tf.reshape(inputs, [ps * bs, -1])
+        x = self.u1_layer(x)
+        x = self.outer_layers(x)
+        x = tf.reshape(x, [ps, bs, -1])
         x = tf.math.log(x)
         return x

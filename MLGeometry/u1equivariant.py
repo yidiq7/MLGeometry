@@ -32,7 +32,8 @@ class U1EquivariantLayer(tf.keras.Model):
         assert self.group_elements.shape[0] == self.n_steps
 
     def call(self, inputs):
-        assert len(inputs.shape) == 2, "wrong shape, expected (B, C)"
+        if len(inputs.shape) != 2:
+            raise ValueError("Wrong shape expected (B, C) but it is ", inputs.shape)
 
         batch_size, dim = inputs.shape
         z = inputs
@@ -46,4 +47,5 @@ class U1EquivariantLayer(tf.keras.Model):
 
         z = tf.reshape(z, [batch_size, self.n_steps, -1])
         z = tf.math.reduce_mean(z, axis=1)
+        z = tf.cast(z, tf.float32)
         return z

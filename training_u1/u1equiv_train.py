@@ -48,7 +48,7 @@ parser.add_argument('--decay_rate', type=float, default=1.0)
 parser.add_argument('--num_correction_pairs', type=int, default=10)
 
 #DD@
-parser.add_argument('--cache_folder', type=str, default='.')
+parser.add_argument('--cache_folder', type=str, default='cache')
 
 
 
@@ -164,8 +164,8 @@ def cal_total_loss(dataset, loss_function):
     total_loss = tf.constant(0, dtype=tf.float32)
     total_mass= tf.constant(0, dtype=tf.float32)
 
-    for step, (points, Omega_Omegabar, mass, restriction) in enumerate(dataset):
-        det_omega = volume_form(points, Omega_Omegabar, mass, restriction)
+    for step, (points, Omega_Omegabar, mass, restriction, fs_metric) in enumerate(dataset):
+        det_omega = volume_form(points, Omega_Omegabar, mass, restriction, fs_metric)
         mass_sum = tf.reduce_sum(mass)
         total_loss += loss_function(Omega_Omegabar, det_omega, mass) * mass_sum
         total_mass += mass_sum
@@ -178,7 +178,7 @@ def cal_max_error(dataset):
     find max|eta - 1| over the whole dataset: calculate the error on each batch then compare.
     '''
     max_error_tmp = 0
-    for step, (points, Omega_Omegabar, mass, restriction) in enumerate(dataset):
+    for step, (points, Omega_Omegabar, mass, restriction, fs_metric) in enumerate(dataset):
         det_omega = volume_form(points, Omega_Omegabar, mass, restriction)
         error = mlg.loss.max_error(Omega_Omegabar, det_omega, mass).numpy()
         if error > max_error_tmp:
