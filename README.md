@@ -19,7 +19,7 @@ More to come.
 
 4. Create the environment with necessary packages:
 
-       conda create -n MLGeometry pip tensorflow-probability sympy matplotlib ipykernel
+       conda create -n MLGeometry pip tensorflow-probability==0.14.0 sympy matplotlib ipykernel
 
 5. Activate the environment and install Tensorflow:
 
