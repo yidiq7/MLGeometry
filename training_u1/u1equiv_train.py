@@ -1,3 +1,4 @@
+from collections import defaultdict
 import os
 #os.environ['CUDA_VISIBLE_DEVICES'] = '0'
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'
@@ -23,11 +24,11 @@ Z = [z0,z1,z2,z3,z4]
 
 parser = argparse.ArgumentParser()
 # Data generation
-parser.add_argument('--seed', type=int)
-parser.add_argument('--n_pairs', type=int)
-parser.add_argument('--batch_size', type=int)
-parser.add_argument('--function')
-parser.add_argument('--psi', type=float)
+parser.add_argument('--seed', type=int, default=1234)
+parser.add_argument('--n_pairs', type=int, default=1024)
+parser.add_argument('--batch_size', type=int, default=128)
+parser.add_argument('--function', default='f0')
+parser.add_argument('--psi', type=float, default=0.5)
 parser.add_argument('--phi', type=float)
 parser.add_argument('--alpha', type=float)
 
@@ -35,15 +36,15 @@ parser.add_argument('--alpha', type=float)
 
 parser.add_argument('--model_name', type=str, default='u1_model_relu')
 parser.add_argument('--layers', type=str, default='10-10_1')
-parser.add_argument('--g_steps', type=int, default=8) 
+parser.add_argument('--g_steps', type=int, default=16)
 parser.add_argument('--load_model')
-parser.add_argument('--save_dir')
-parser.add_argument('--save_name')
+parser.add_argument('--save_dir', default='experiments-marek')
+parser.add_argument('--save_name', default='no_name')
 
 # Training
-parser.add_argument('--max_epochs', type=int)
-parser.add_argument('--loss_func')
-parser.add_argument('--clip_threshold', type=float)
+parser.add_argument('--max_epochs', type=int, default=250)
+parser.add_argument('--loss_func', default='weighted_MAPE')
+parser.add_argument('--clip_threshold', type=float, default=None)
 parser.add_argument('--optimizer', default='Adam')
 parser.add_argument('--learning_rate', type=float, default=0.001)
 parser.add_argument('--decay_rate', type=float, default=1.0)
@@ -51,7 +52,7 @@ parser.add_argument('--num_correction_pairs', type=int, default=10)
 
 #DD@
 parser.add_argument('--cache_folder', type=str, default='cache')
-parser.add_argument('--mem_limit', type=int, default=None)
+parser.add_argument('--mem_limit', type=int, default=16)
 
 
 print_was = print
@@ -150,6 +151,7 @@ m_units = list(map(int, m_layers.split('_')))
 model_list = {
     "u1_model_relu": models.u1_model_relu,
     "u1_model_tanh": models.u1_model_tanh,
+    "u1_model_simple": models.u1_model_simple,
 }
 
 load_path = args.load_model
@@ -157,6 +159,10 @@ if load_path is not None:
     model = tf.keras.models.load_model(load_path, compile=False)
 else:
     model = model_list[args.model_name](n_units, m_units)
+
+
+# model.build(inputs=tf.Tensor(shape=(None, 5), dtype=tf.complex64))
+
 
 
 max_epochs = args.max_epochs
@@ -179,6 +185,8 @@ def volume_form(x, Omega_Omegabar, mass, restriction, fs_metric):
     factor = tf.reduce_sum(weights * volume_form / Omega_Omegabar)
     #factor = tf.constant(35.1774, dtype=tf.complex64)
     return volume_form / factor
+
+
 
 def cal_total_loss(dataset, loss_function):
 
@@ -238,23 +246,92 @@ else:
     train_summary_writer = tf.summary.create_file_writer(str(train_log_dir))
     test_summary_writer = tf.summary.create_file_writer(str(test_log_dir))
 
+
+    # class VolumeModel(tf.keras.Model):
+    #     def __init__(self, model):
+    #         super(VolumeModel, self).__init__()
+    #         self.model = model
+
+    #     @tf.function
+    #     def call(self, inputs):
+    #         x, Omega_Omegabar, mass, restriction, fs_metric = inputs
+    #         y = self.model(x)
+    #         kahler_metric = mlg.complex_math.complex_hessian(tf.math.real(y), x)
+    #         volume_form = tf.math.real(tf.linalg.det(fs_metric + tf.matmul(restriction, tf.matmul(kahler_metric, restriction, adjoint_b=True))))
+    #         weights = mass / tf.reduce_sum(mass)
+    #         factor = tf.reduce_sum(weights * volume_form / Omega_Omegabar)
+    #         #factor = tf.constant(35.1774, dtype=tf.complex64)
+    #         return volume_form / factor
+
+    # def map_func(x, Omega_Omegabar, mass, restriction, fs_metric):
+    #     return (
+    #         (x, Omega_Omegabar, mass, restriction, fs_metric),
+    #         (Omega_Omegabar, mass)
+    #     )    
+
+    # train_set_t = train_set.map(map_func)
+    # test_set_t = test_set.map(map_func)
+
+    # volmodel = VolumeModel(model)
+    # volmodel.compile(
+    #     optimizer=optimizer, 
+    #     loss=lambda y_true, y_pred: loss_func(y_true[0], y_pred, y_true[1])
+    # )
+
+    # x_sample, y_sample = list(train_set_t.take(1))[0]
+    # y_tmp = volmodel(x_sample)
+    # volmodel.summary()
+
+    # volmodel.fit(
+    #     train_set_t,
+    #     epochs=max_epochs,
+    #     validation_data=test_set_t,
+    #     verbose=1
+    # )
+
+    # print("Done")
+    # exit(0)
+
     stop = False
     loss_old = 100000
     epoch = 0
 
+
+
     while epoch < max_epochs and stop is False:
         epoch = epoch + 1
+        train_loss = []
+        mean_grads = defaultdict(list)
         for step, (points, Omega_Omegabar, mass, restriction, fs_metric) in enumerate(train_set):
+
+
             with tf.GradientTape() as tape:
                 det_omega = volume_form(points, Omega_Omegabar, mass, restriction, fs_metric)
-                loss = loss_func(Omega_Omegabar, det_omega, mass)  
+                loss = loss_func(Omega_Omegabar, det_omega, mass)
                 grads = tape.gradient(loss, model.trainable_weights)
+
+                for grad, var in zip(grads, model.trainable_weights):
+                    if grad is None:
+                        mean_grads[var.name + "-- None"].append(0)
+                    else:
+                        # give gradient norm
+                        mean_grads[var.name].append(tf.norm(grad))
+
                 if clip_threshold is not None:
                     grads = [tf.clip_by_value(grad, -clip_threshold, clip_threshold) for grad in grads]
             optimizer.apply_gradients(zip(grads, model.trainable_weights))
-            #tf.print(model.tranable_weights) 
-            #if step % 500 == 0:
-            #    print("step %d: loss = %.4f" % (step, loss))
+            train_loss.append(loss.numpy())
+        
+        if epoch == 1:
+            for w in model.trainable_weights:
+                print(w.name, w.shape)
+
+        # evaluation after every round of training
+        test_loss = cal_total_loss(test_set, loss_func)
+        print("epoch:", epoch, "test_loss:", test_loss, "train_loss:", np.mean(train_loss))
+        for key in mean_grads.keys():
+            print(key, np.mean(mean_grads[key]))
+
         if epoch % 10 == 0:
             sigma_max_train = cal_max_error(train_set) 
             sigma_max_test = cal_max_error(test_set) 
@@ -276,8 +353,8 @@ else:
             delta_sigma_train = math.sqrt(cal_total_loss(train_set, delta_sigma_square_train) / n_pairs)
             delta_sigma_test = math.sqrt(cal_total_loss(test_set, delta_sigma_square_test) / n_pairs)
 
-            print("train_loss:", loss.numpy())
-            print("test_loss:", cal_total_loss(test_set, loss_func))
+            # print("train_loss:", loss.numpy())
+            # print("test_loss:", test_loss)
 
             with train_summary_writer.as_default():
                 tf.summary.scalar('max_error', sigma_max_train, step=epoch)
