@@ -73,12 +73,11 @@ def function_factory(model, loss, dataset):
     def volume_form(x, Omega_Omegabar, mass, restriction, fs_metric):
 
         kahler_metric =  complex_math.complex_hessian(tf.math.real(model(x)), x)
-        volume_form = tf.math.real(tf.linalg.det(tf.matmul(restriction, tf.matmul(kahler_metric, restriction, adjoint_b=True))))
-        cy_metric = fs_metric + volume_form
+        volume_form = tf.math.real(tf.linalg.det(fs_metric + tf.matmul(restriction, tf.matmul(kahler_metric, restriction, adjoint_b=True))))
         weights = mass / tf.reduce_sum(mass)
-        factor = tf.reduce_sum(weights * cy_metric / Omega_Omegabar)
+        factor = tf.reduce_sum(weights * volume_form / Omega_Omegabar)
         #factor = tf.constant(35.1774, dtype=tf.complex64)
-        return cy_metric / factor
+        return volume_form / factor
 
     # now create a function that will be returned by this factory
     def f(params_1d):

@@ -73,7 +73,7 @@ elif args.function == 'f2':
 
 np.random.seed(seed)
 tf.random.set_seed(seed)
-cache_folder = Path(args.cache_folder) / f"cache_v2_s{seed}_n{n_pairs}"
+cache_folder = Path(args.cache_folder) / f"cache_v3_s{seed}_n{n_pairs}"
 cache_folder.mkdir(exist_ok=True)
 cache_trainset_path = cache_folder / 'train_set'
 cache_testset_path = cache_folder / 'test_set'
@@ -151,12 +151,11 @@ save_name = args.save_name
 @tf.function
 def volume_form(x, Omega_Omegabar, mass, restriction, fs_metric):
     kahler_metric = mlg.complex_math.complex_hessian(tf.math.real(model(x)), x)
-    volume_form = tf.math.real(tf.linalg.det(tf.matmul(restriction, tf.matmul(kahler_metric, restriction, adjoint_b=True))))
-    cy_metric = fs_metric + volume_form
+    volume_form = tf.math.real(tf.linalg.det(fs_metric + tf.matmul(restriction, tf.matmul(kahler_metric, restriction, adjoint_b=True))))
     weights = mass / tf.reduce_sum(mass)
-    factor = tf.reduce_sum(weights * cy_metric / Omega_Omegabar)
+    factor = tf.reduce_sum(weights * volume_form / Omega_Omegabar)
     #factor = tf.constant(35.1774, dtype=tf.complex64)
-    return cy_metric / factor
+    return volume_form / factor
 
 def cal_total_loss(dataset, loss_function):
 

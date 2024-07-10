@@ -32,9 +32,7 @@ class u1_model_relu(tf.keras.Model):
         ])
 
     def call(self, inputs):
-        assert len(inputs.shape) == 3
-        ps, bs = inputs.shape[:2]
-        x = self.u1_layer(x)
+        x = self.u1_layer(inputs)
         x = self.outer_layers(x)
         x = tf.math.log(x)
         return x
