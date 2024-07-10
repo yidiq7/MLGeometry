@@ -25,7 +25,8 @@ for psi in 0.5 ; do
                                      --decay_rate 1 \
                                      --max_epochs 1000 \
                                      --loss_func ${loss_func} \
-                                     --cache_folder "cache"
+                                     --cache_folder "cache" \
+                                     --mem_limit 8
         done
     done
 done

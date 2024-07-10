@@ -17,6 +17,7 @@ from pathlib import Path
 import MLGeometry as mlg
 import models
 
+
 z0, z1, z2, z3, z4 = sp.symbols('z0, z1, z2, z3, z4')
 Z = [z0,z1,z2,z3,z4]
 
@@ -50,11 +51,32 @@ parser.add_argument('--num_correction_pairs', type=int, default=10)
 
 #DD@
 parser.add_argument('--cache_folder', type=str, default='cache')
+parser.add_argument('--mem_limit', type=int, default=None)
 
 
+print_was = print
+print = lambda *x, **y: print_was(*x, **(y | {'flush': True}))
 
 args = parser.parse_args()
+
+
 print("Processing model: " + args.save_name)
+
+gpus = tf.config.list_physical_devices('GPU')
+if gpus:
+  print("Found gpus", gpus)
+  if args.mem_limit is not None:
+    try:
+        for gpu in gpus:
+            tf.config.set_logical_device_configuration(
+                gpu, [tf.config.LogicalDeviceConfiguration(memory_limit=args.mem_limit*1024)])
+        print(f"Memory limit set to {args.mem_limit}GB for each GPU")
+    except RuntimeError as e:
+        print("Memory limit not set ", e)
+else:
+    print("No gpus found")
+
+
 # Data generation 
 seed = args.seed
 n_pairs = args.n_pairs
