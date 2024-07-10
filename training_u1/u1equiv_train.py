@@ -177,7 +177,7 @@ def cal_max_error(dataset):
     '''
     max_error_tmp = 0
     for step, (points, Omega_Omegabar, mass, restriction, fs_metric) in enumerate(dataset):
-        det_omega = volume_form(points, Omega_Omegabar, mass, restriction)
+        det_omega = volume_form(points, Omega_Omegabar, mass, restriction, fs_metric)
         error = mlg.loss.max_error(Omega_Omegabar, det_omega, mass).numpy()
         if error > max_error_tmp:
             max_error_tmp = error
