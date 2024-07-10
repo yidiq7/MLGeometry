@@ -116,8 +116,6 @@ tf.random.set_seed(seed+1)
 if batch_size is None:
     batch_size = n_pairs
 
-train_set = train_set.shuffle(n_pairs).batch(batch_size)
-test_set = test_set.shuffle(n_pairs).batch(batch_size)
 
 # Network 
 

@@ -4,7 +4,6 @@ from MLGeometry.u1equivariant import U1EquivariantLayer
 __all__ = ['u1_model']
 
 kINPUT_DIM = 10
-kPAIR_DIM = 50
 
 class u1_model_relu(tf.keras.Model):
 
@@ -16,7 +15,7 @@ class u1_model_relu(tf.keras.Model):
         inner_layers = tf.keras.Sequential([
             tf.keras.layers.Dense(
                 n_units[i],
-                input_shape=((kINPUT_DIM, ) if i == 0 else None),
+                input_shape=((kINPUT_DIM, ) if i == 0 else (n_units[i - 1], )),
                 activation=('relu' if i < len(n_units) - 1 else None)
             )
             for i in range(len(n_units))
@@ -35,10 +34,7 @@ class u1_model_relu(tf.keras.Model):
     def call(self, inputs):
         assert len(inputs.shape) == 3
         ps, bs = inputs.shape[:2]
-        assert ps == kPAIR_DIM
-        x = tf.reshape(inputs, [ps * bs, -1])
         x = self.u1_layer(x)
         x = self.outer_layers(x)
-        x = tf.reshape(x, [ps, bs, -1])
         x = tf.math.log(x)
         return x
