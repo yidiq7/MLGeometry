@@ -26,7 +26,7 @@ def dataset_on_patch(patch):
     patch.omega_omegabar = patch.get_omega_omegabar(lambdify=True)
     patch.restriction = patch.get_restriction(lambdify=True)
     patch.r_tf = patch.num_restriction_tf()
-
+    
     x = tf.convert_to_tensor(np.array(patch.points, dtype=np.complex64))
     y = tf.cast(patch.num_Omega_Omegabar_tf(), dtype=tf.float32)
 
