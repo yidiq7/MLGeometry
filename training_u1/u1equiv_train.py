@@ -149,6 +149,7 @@ m_units = list(map(int, m_layers.split('_')))
 
 model_list = {
     "u1_model_relu": models.u1_model_relu,
+    "u1_model_tanh": models.u1_model_tanh,
 }
 
 load_path = args.load_model
