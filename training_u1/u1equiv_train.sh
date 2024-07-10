@@ -29,4 +29,4 @@ for psi in 0.5 ; do
                                      --mem_limit 8
         done
     done
-done
+done >log_$(basename $0).txt 2>&1
