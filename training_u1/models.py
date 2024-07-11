@@ -28,6 +28,7 @@ class u1_model_relu(tf.keras.Model):
             tf.keras.layers.Dense(
                 m_units[i],
                 activation=('relu' if i < len(m_units) - 1 else None),
+                use_bias=(True if i < len(m_units) - 1 else False),
                 name=f'outer_dense_{i}'
             )
             for i in range(len(m_units))
@@ -63,6 +64,7 @@ class u1_model_tanh(tf.keras.Model):
                 m_units[i],
                 input_shape=((n_units[-1], ) if i == 0 else (m_units[i - 1], )),
                 activation=('tanh' if i < len(m_units) - 1 else None),
+                use_bias=(True if i < len(m_units) - 1 else False),
                 name=f'outer_dense_{i}'
             )
             for i in range(len(m_units))

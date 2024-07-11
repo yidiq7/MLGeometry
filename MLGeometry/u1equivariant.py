@@ -37,8 +37,11 @@ class U1EquivariantLayer(tf.keras.Model):
 
         batch_size, dim = inputs.shape
         z = inputs
-        z = z / tf.cast(tf.math.abs(z), tf.complex64)
+
+        norm = tf.norm(z, ord='euclidean', axis=1)
+        z = z / norm[:, None]
         z = tf.multiply(self.group_elements[None, :, None],  z[:, None, :])
+
         # z = tf.reshape(z, [batch_size*self.n_steps, dim])
         z = tf.reshape(z, [-1, dim])
         z_real, z_imag = tf.math.real(z), tf.math.imag(z)
