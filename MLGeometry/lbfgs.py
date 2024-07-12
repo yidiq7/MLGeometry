@@ -70,15 +70,14 @@ def function_factory(model, loss, dataset):
             #tf.print(model.trainable_variables[i])
 
     @tf.function
-    def volume_form(x, Omega_Omegabar, mass, restriction):
+    def volume_form(x, Omega_Omegabar, mass, restriction, fs_metric):
 
-        kahler_metric = complex_math.complex_hessian(tf.math.real(model(x)), x)
-        volume_form = tf.math.real(tf.linalg.det(tf.matmul(restriction, tf.matmul(kahler_metric, restriction, adjoint_b=True))))
+        kahler_metric =  complex_math.complex_hessian(tf.math.real(model(x)), x)
+        volume_form = tf.math.real(tf.linalg.det(fs_metric + tf.matmul(restriction, tf.matmul(kahler_metric, restriction, adjoint_b=True))))
         weights = mass / tf.reduce_sum(mass)
         factor = tf.reduce_sum(weights * volume_form / Omega_Omegabar)
         #factor = tf.constant(35.1774, dtype=tf.complex64)
         return volume_form / factor
-
 
     # now create a function that will be returned by this factory
     def f(params_1d):
@@ -94,12 +93,12 @@ def function_factory(model, loss, dataset):
         """
 
         # use GradientTape so that we can calculate the gradient of loss w.r.t. parameters
-        for step, (points, Omega_Omegabar, mass, restriction) in enumerate(dataset):
+        for step, (points, Omega_Omegabar, mass, restriction, fs_metric) in enumerate(dataset):
             with tf.GradientTape() as tape:
                 # update the parameters in the model
                 assign_new_model_parameters(params_1d)
                 # calculate the loss
-                det_omega = volume_form(points, Omega_Omegabar, mass, restriction)
+                det_omega = volume_form(points, Omega_Omegabar, mass, restriction, fs_metric)
                 loss_value = loss(Omega_Omegabar, det_omega, mass)
 
             # calculate gradients and convert to 1D tf.Tensor

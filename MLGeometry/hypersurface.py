@@ -419,7 +419,7 @@ class Hypersurface():
                 else:
                     h_matrix = np.identity(self.n_sections, dtype=np.complex64)
             elif h_matrix == 'FS':
-                h_matrix = self.h_FS.astype(np.complex64)
+                h_matrix = np.diag(sp.Poly(sp.expand(sum(self.coordinates)**k)).coeffs()).astype(np.complex64)
                 #h_matrix = np.array(self.h_FS, dtype=np.complex64)
 
         #h_tf = tf.constant(h_matrix)
