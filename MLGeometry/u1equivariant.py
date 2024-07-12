@@ -15,7 +15,7 @@ class U1EquivariantLayer(tf.keras.Model):
             stop = 2*np.pi*(self.n_steps-1) / self.n_steps,
             num = self.n_steps,
         ), dtype=tf.float32)
-        
+
         # self.phi = phi
 
         if self.gen_bias:
@@ -55,3 +55,17 @@ class U1EquivariantLayer(tf.keras.Model):
         z = tf.math.reduce_mean(z, axis=1)
         z = tf.cast(z, tf.float32)
         return z
+    
+
+    def get_config(self):
+        config = super(U1EquivariantLayer, self).get_config()
+        config.update({
+            'layer': self.layer,
+            'g_steps': self.n_steps,
+            'g_bias': self.gen_bias,
+        })
+        return config
+
+    @classmethod
+    def from_config(cls, config):
+        return cls(**config)

@@ -162,7 +162,8 @@ else:
 
 
 # model.build(inputs=tf.Tensor(shape=(None, 5), dtype=tf.complex64))
-
+data_sample = list(train_set.take(1))[0]
+output_sample = model(data_sample[0])
 
 
 max_epochs = args.max_epochs
@@ -247,51 +248,6 @@ else:
     test_summary_writer = tf.summary.create_file_writer(str(test_log_dir))
 
 
-    # class VolumeModel(tf.keras.Model):
-    #     def __init__(self, model):
-    #         super(VolumeModel, self).__init__()
-    #         self.model = model
-
-    #     @tf.function
-    #     def call(self, inputs):
-    #         x, Omega_Omegabar, mass, restriction, fs_metric = inputs
-    #         y = self.model(x)
-    #         kahler_metric = mlg.complex_math.complex_hessian(tf.math.real(y), x)
-    #         volume_form = tf.math.real(tf.linalg.det(fs_metric + tf.matmul(restriction, tf.matmul(kahler_metric, restriction, adjoint_b=True))))
-    #         weights = mass / tf.reduce_sum(mass)
-    #         factor = tf.reduce_sum(weights * volume_form / Omega_Omegabar)
-    #         #factor = tf.constant(35.1774, dtype=tf.complex64)
-    #         return volume_form / factor
-
-    # def map_func(x, Omega_Omegabar, mass, restriction, fs_metric):
-    #     return (
-    #         (x, Omega_Omegabar, mass, restriction, fs_metric),
-    #         (Omega_Omegabar, mass)
-    #     )    
-
-    # train_set_t = train_set.map(map_func)
-    # test_set_t = test_set.map(map_func)
-
-    # volmodel = VolumeModel(model)
-    # volmodel.compile(
-    #     optimizer=optimizer, 
-    #     loss=lambda y_true, y_pred: loss_func(y_true[0], y_pred, y_true[1])
-    # )
-
-    # x_sample, y_sample = list(train_set_t.take(1))[0]
-    # y_tmp = volmodel(x_sample)
-    # volmodel.summary()
-
-    # volmodel.fit(
-    #     train_set_t,
-    #     epochs=max_epochs,
-    #     validation_data=test_set_t,
-    #     verbose=1
-    # )
-
-    # print("Done")
-    # exit(0)
-
     stop = False
     loss_old = 100000
     epoch = 0
@@ -310,21 +266,11 @@ else:
                 loss = loss_func(Omega_Omegabar, det_omega, mass)
                 grads = tape.gradient(loss, model.trainable_weights)
 
-                for grad, var in zip(grads, model.trainable_weights):
-                    if grad is None:
-                        mean_grads[var.name + "-- None"].append(0)
-                    else:
-                        # give gradient norm
-                        mean_grads[var.name].append(tf.norm(grad))
-
                 if clip_threshold is not None:
                     grads = [tf.clip_by_value(grad, -clip_threshold, clip_threshold) for grad in grads]
             optimizer.apply_gradients(zip(grads, model.trainable_weights))
             train_loss.append(loss.numpy())
         
-        if epoch == 1:
-            for w in model.trainable_weights:
-                print(w.name, w.shape)
 
         # evaluation after every round of training
         test_loss = cal_total_loss(test_set, loss_func)
@@ -332,7 +278,12 @@ else:
         for key in mean_grads.keys():
             print(key, np.mean(mean_grads[key]))
 
-        if epoch % 10 == 0:
+        if epoch % 20 == 0:
+            try:
+                model.save(save_dir / f"{save_name}_epoch{epoch}")
+            except Exception as e:
+                print("Error saving model", e)
+
             sigma_max_train = cal_max_error(train_set) 
             sigma_max_test = cal_max_error(test_set) 
 
