@@ -44,5 +44,26 @@ More to come.
 
 ## [Sample jupyter notebook](https://github.com/yidiq7/MLGeometry/blob/master/Guide.ipynb)
 
+<!--## [Leaderboard](https://github.com/yidiq7/MLGeometry/blob/master/Leaderboard.md)-->
 
-## [Leaderboard](https://github.com/yidiq7/MLGeometry/blob/master/Leaderboard.md)
+## Citation
+
+You can find our paper on [arxiv](https://arxiv.org/abs/2012.04797) or [PMLR](https://proceedings.mlr.press/v145/douglas22a.html). 
+If you find our paper or package useful in your research or project, please cite it as follows:
+
+```
+@InProceedings{pmlr-v145-douglas22a,
+  title = 	 {Numerical Calabi-Yau metrics from holomorphic networks},
+  author =       {Douglas, Michael and Lakshminarasimhan, Subramanian and Qi, Yidi},
+  booktitle = 	 {Proceedings of the 2nd Mathematical and Scientific Machine Learning Conference},
+  pages = 	 {223--252},
+  year = 	 {2022},
+  editor = 	 {Bruna, Joan and Hesthaven, Jan and Zdeborova, Lenka},
+  volume = 	 {145},
+  series = 	 {Proceedings of Machine Learning Research},
+  month = 	 {16--19 Aug},
+  publisher =    {PMLR},
+  pdf = 	 {https://proceedings.mlr.press/v145/douglas22a/douglas22a.pdf},
+  url = 	 {https://proceedings.mlr.press/v145/douglas22a.html},
+}
+```
