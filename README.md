@@ -43,7 +43,7 @@ If you prefer to use an older version of MLGeometry based on Tensorflow 2.12 and
 
 ## [Sample jupyter notebook](https://github.com/yidiq7/MLGeometry/blob/main/Guide.ipynb)
 
-[![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/yidiq7/blob/main/Guide.ipynb)
+[![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/yidiq7/MLGeometry/blob/main/Guide.ipynb)
 
 ## Citation
 
