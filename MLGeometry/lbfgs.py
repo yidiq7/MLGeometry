@@ -15,7 +15,7 @@ TensorFlow Probability version: 0.8.0
 NumPy version: 1.17.2
 Matplotlib version: 3.1.1
 """
-import numpy
+import numpy as np
 import tensorflow as tf
 import tensorflow_probability as tfp
 from matplotlib import pyplot
@@ -48,7 +48,7 @@ def function_factory(model, loss, dataset):
     part = [] # partition indices
 
     for i, shape in enumerate(shapes):
-        n = numpy.product(shape)
+        n = np.prod(shape)
         idx.append(tf.reshape(tf.range(count, count+n, dtype=tf.int32), shape))
         part.extend([i]*n)
         count += n
@@ -71,7 +71,6 @@ def function_factory(model, loss, dataset):
 
     @tf.function
     def volume_form(x, Omega_Omegabar, mass, restriction):
-
         kahler_metric = complex_math.complex_hessian(tf.math.real(model(x)), x)
         volume_form = tf.math.real(tf.linalg.det(tf.matmul(restriction, tf.matmul(kahler_metric, restriction, adjoint_b=True))))
         weights = mass / tf.reduce_sum(mass)

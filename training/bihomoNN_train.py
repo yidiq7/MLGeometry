@@ -6,7 +6,6 @@ sys.path.append("..")
 
 import tensorflow as tf
 import tensorflow_probability as tfp
-import tensorflow.python.keras.backend as K
 import numpy as np
 import sympy as sp
 import time
@@ -101,7 +100,7 @@ model_list = [zerolayer, onelayer, twolayers, threelayers, fourlayers, fivelayer
 
 load_path = args.load_model
 if load_path is not None:
-    model = tf.keras.models.load_model(load_path, compile=False)
+    model = keras.models.load_model(load_path, compile=False)
 elif args.OuterProductNN_k is not None:
     try:
         model = model_list_OuterProductNN[k-2]()
@@ -188,14 +187,14 @@ if args.optimizer.lower() == 'lbfgs':
 
 else:
     if args.optimizer.lower() == 'sgd':
-        optimizer = tf.keras.optimizers.SGD(args.learning_rate)
+        optimizer = keras.optimizers.SGD(args.learning_rate)
     else:
-        lr_schedule = tf.keras.optimizers.schedules.ExponentialDecay(
+        lr_schedule = keras.optimizers.schedules.ExponentialDecay(
             initial_learning_rate=args.learning_rate,
             decay_steps = HS.n_points/batch_size,
             decay_rate = args.decay_rate)
-        optimizer = tf.keras.optimizers.Adam(learning_rate=lr_schedule)
-        #optimizer = tf.keras.optimizers.Adam(learning_rate=args.learning_rate)
+        optimizer = keras.optimizers.Adam(learning_rate=lr_schedule)
+        #optimizer = keras.optimizers.Adam(learning_rate=args.learning_rate)
 
     train_log_dir = save_dir + '/logs/' + save_name + '/train'
     test_log_dir = save_dir + '/logs/' + save_name + '/test'
@@ -231,12 +230,12 @@ else:
             sigma_test  = cal_total_loss(test_set, mlg.loss.weighted_MAPE)
 
             def delta_sigma_square_train(y_true, y_pred, mass):
-                weights = mass / K.sum(mass)
-                return K.sum((K.abs(y_true - y_pred) / y_true - sigma_train)**2 * weights)
+                weights = mass / tf.reduce_sum(mass)
+                return tf.reduce_sum((tf.abs(y_true - y_pred) / y_true - sigma_train)**2 * weights)
 
             def delta_sigma_square_test(y_true, y_pred, mass):
-                weights = mass / K.sum(mass)
-                return K.sum((K.abs(y_true - y_pred) / y_true - sigma_test)**2 * weights)
+                weights = mass / tf.reduce_sum(mass)
+                return tf.reduce_sum((tf.abs(y_true - y_pred) / y_true - sigma_test)**2 * weights)
 
             delta_sigma_train = math.sqrt(cal_total_loss(train_set, delta_sigma_square_train) / HS.n_points)
             delta_sigma_test = math.sqrt(cal_total_loss(test_set, delta_sigma_square_test) / HS.n_points)
@@ -277,20 +276,20 @@ sigma_max_test = cal_max_error(test_set)
 # Calculate delta_sigma
 
 def delta_sigma_square_train(y_true, y_pred, mass):
-    weights = mass / K.sum(mass)
-    return K.sum((K.abs(y_true - y_pred) / y_true - sigma_train)**2 * weights)
+    weights = mass / tf.reduce_sum(mass)
+    return tf.reduce_sum((tf.abs(y_true - y_pred) / y_true - sigma_train)**2 * weights)
 
 def delta_sigma_square_test(y_true, y_pred, mass):
-    weights = mass / K.sum(mass)
-    return K.sum((K.abs(y_true - y_pred) / y_true - sigma_test)**2 * weights)
+    weights = mass / tf.reduce_sum(mass)
+    return tf.reduce_sum((tf.abs(y_true - y_pred) / y_true - sigma_test)**2 * weights)
 
 def delta_E_square_train(y_true, y_pred, mass):
-    weights = mass / K.sum(mass)
-    return K.sum(((y_pred / y_true - 1)**2 - E_train)**2 * weights)
+    weights = mass / tf.reduce_sum(mass)
+    return tf.reduce_sum(((y_pred / y_true - 1)**2 - E_train)**2 * weights)
 
 def delta_E_square_test(y_true, y_pred, mass):
-    weights = mass / K.sum(mass)
-    return K.sum(((y_pred / y_true - 1)**2 - E_test)**2 * weights)
+    weights = mass / tf.reduce_sum(mass)
+    return tf.reduce_sum(((y_pred / y_true - 1)**2 - E_test)**2 * weights)
 
 delta_sigma_train = math.sqrt(cal_total_loss(train_set, delta_sigma_square_train) / HS.n_points)
 delta_sigma_test = math.sqrt(cal_total_loss(test_set, delta_sigma_square_test) / HS.n_points)

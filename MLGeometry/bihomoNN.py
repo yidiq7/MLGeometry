@@ -1,24 +1,27 @@
-from tensorflow import keras
-from tensorflow.python.keras import activations
+import keras
+from keras import activations
 import numpy as np 
 import tensorflow as tf
 
 __all__ = ['Bihomogeneous','Bihomogeneous_k2','Bihomogeneous_k3',
            'Bihomogeneous_k4','SquareDense','WidthOneDense']
 
+@keras.saving.register_keras_serializable(package="MLGeometry")
 class Bihomogeneous(keras.layers.Layer):
     '''A layer transform zi to zi*zjbar'''
     def __init__(self, d=5):
         super(Bihomogeneous, self).__init__()
         self.d = d
-        
+
     def call(self, inputs):
         zzbar = tf.einsum('ai,aj->aij', inputs, tf.math.conj(inputs))
         zzbar = tf.linalg.band_part(zzbar, 0, -1)
         zzbar = tf.reshape(zzbar, [-1, self.d**2])
         zzbar = tf.concat([tf.math.real(zzbar), tf.math.imag(zzbar)], axis=1)
         return remove_zero_entries(zzbar)
-        
+
+
+@keras.saving.register_keras_serializable(package="MLGeometry")
 class Bihomogeneous_k2(keras.layers.Layer):
     '''A layer transform zi to symmetrized zi1*zi2, then to zi1*zi2 * zi1zi2bar'''
     def __init__(self):
@@ -39,11 +42,12 @@ class Bihomogeneous_k2(keras.layers.Layer):
         return remove_zero_entries(zzbar)
 
 
+@keras.saving.register_keras_serializable(package="MLGeometry")
 class Bihomogeneous_k3(keras.layers.Layer):
     '''A layer transform zi to symmetrized zi1*zi2*zi3, then to zzbar'''
     def __init__(self):
         super(Bihomogeneous_k3, self).__init__()
-        
+
     def call(self, inputs):
         zz = tf.einsum('ai,aj,ak->aijk', inputs, inputs, inputs)
         zz = tf.linalg.band_part(zz, 0, -1) # keep upper triangular 2/3
@@ -59,11 +63,13 @@ class Bihomogeneous_k3(keras.layers.Layer):
         zzbar = tf.concat([tf.math.real(zzbar), tf.math.imag(zzbar)], axis=1)
         return remove_zero_entries(zzbar)
 
+
+@keras.saving.register_keras_serializable(package="MLGeometry")
 class Bihomogeneous_k4(keras.layers.Layer):
     '''A layer transform zi to symmetrized zi1*zi2*zi3*zi4, then to zzbar'''
     def __init__(self):
         super(Bihomogeneous_k4, self).__init__()
-        
+
     def call(self, inputs):
         zz = tf.einsum('ai,aj,ak,al->aijkl', inputs, inputs, inputs, inputs)
         zz = tf.linalg.band_part(zz, 0, -1) 
@@ -80,6 +86,7 @@ class Bihomogeneous_k4(keras.layers.Layer):
         zzbar = tf.concat([tf.math.real(zzbar), tf.math.imag(zzbar)], axis=1)
         return remove_zero_entries(zzbar)
 
+
 def remove_zero_entries(x):
     x = tf.transpose(x)
     intermediate_tensor = tf.reduce_sum(tf.abs(x), 1)
@@ -88,13 +95,15 @@ def remove_zero_entries(x):
     x = tf.transpose(x)
     return x
 
+
+@keras.saving.register_keras_serializable(package="MLGeometry")
 class SquareDense(keras.layers.Layer):
     def __init__(self, input_dim, units, activation=tf.square, trainable=True):
         super(SquareDense, self).__init__()
         w_init = tf.random_normal_initializer(mean=0.0, stddev=0.05)
         self.w = self.add_weight(
             shape=(input_dim, units),
-            initializer=tf.keras.initializers.Constant(
+            initializer=keras.initializers.Constant(
                         tf.math.abs(w_init(shape=(input_dim, units), dtype='float32'))),
             #initial_value=w_init(shape=(input_dim, units), dtype='float32'),
             trainable=trainable,
@@ -104,6 +113,8 @@ class SquareDense(keras.layers.Layer):
     def call(self, inputs):
         return self.activation(tf.matmul(inputs, self.w))
 
+
+@keras.saving.register_keras_serializable(package="MLGeometry")
 class WidthOneDense(keras.layers.Layer):
     '''
     Usage: layer = WidthOneDense(n**2, 1)
@@ -124,7 +135,7 @@ class WidthOneDense(keras.layers.Layer):
         w_init = tf.reshape(tf.concat([upper_tri, tf.zeros(input_dim - len(upper_tri))], axis=0), [-1, 1])
         self.w = self.add_weight(
             shape=(input_dim, units),
-            initializer=tf.keras.initializer(w_init),
+            initializer=keras.initializer(w_init),
             trainable=trainable,
         )
         self.activation =  activations.get(activation)

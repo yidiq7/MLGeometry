@@ -5,7 +5,7 @@ __all__ = ['zerolayer', 'onelayer', 'twolayers', 'threelayers', 'fourlayers',
            'fivelayers','OuterProductNN_k2','OuterProductNN_k3','OuterProductNN_k4',
            'k2_twolayers', 'k2_threelayers','k4_onelayer','k4_twolayers']
  
-class zerolayer(tf.keras.Model):
+class zerolayer(keras.Model):
 
     def __init__(self, n_units):
         super(zerolayer, self).__init__()
@@ -18,7 +18,7 @@ class zerolayer(tf.keras.Model):
         x = tf.math.log(x)
         return x
 
-class onelayer(tf.keras.Model):
+class onelayer(keras.Model):
 
     def __init__(self, n_units):
         super(onelayer, self).__init__()
@@ -34,7 +34,7 @@ class onelayer(tf.keras.Model):
         return x
 
 
-class twolayers(tf.keras.Model):
+class twolayers(keras.Model):
 
     def __init__(self, n_units):
         super(twolayers, self).__init__()
@@ -52,7 +52,7 @@ class twolayers(tf.keras.Model):
         return x
 
 
-class threelayers(tf.keras.Model):
+class threelayers(keras.Model):
 
     def __init__(self, n_units):
         super(threelayers, self).__init__()
@@ -72,7 +72,7 @@ class threelayers(tf.keras.Model):
         return x
 
 
-class fourlayers(tf.keras.Model):
+class fourlayers(keras.Model):
 
     def __init__(self, n_units):
         super(fourlayers, self).__init__()
@@ -94,7 +94,7 @@ class fourlayers(tf.keras.Model):
         return x
 
 
-class fivelayers(tf.keras.Model):
+class fivelayers(keras.Model):
 
     def __init__(self, n_units):
         super(fivelayers, self).__init__()
@@ -117,7 +117,7 @@ class fivelayers(tf.keras.Model):
         x = tf.math.log(x)
         return x
 
-class OuterProductNN_k2(tf.keras.Model):
+class OuterProductNN_k2(keras.Model):
    
     def __init__(self):
         super(OuterProductNN_k2, self).__init__()
@@ -131,7 +131,7 @@ class OuterProductNN_k2(tf.keras.Model):
         return x
 
 
-class OuterProductNN_k3(tf.keras.Model):
+class OuterProductNN_k3(keras.Model):
    
     def __init__(self):
         super(OuterProductNN_k3, self).__init__()
@@ -144,7 +144,7 @@ class OuterProductNN_k3(tf.keras.Model):
         x = tf.math.log(x)
         return x
 
-class OuterProductNN_k4(tf.keras.Model):
+class OuterProductNN_k4(keras.Model):
    
     def __init__(self):
         super(OuterProductNN_k4, self).__init__()
@@ -159,7 +159,7 @@ class OuterProductNN_k4(tf.keras.Model):
             x = tf.math.log(x)
         return x
 
-class k2_twolayers(tf.keras.Model):
+class k2_twolayers(keras.Model):
 
     def __init__(self, n_units):
         super(k2_twolayers, self).__init__()
@@ -177,7 +177,7 @@ class k2_twolayers(tf.keras.Model):
         return x
 
 
-class k2_threelayers(tf.keras.Model):
+class k2_threelayers(keras.Model):
 
     def __init__(self, n_units):
         super(k2_threelayers, self).__init__()
@@ -196,7 +196,7 @@ class k2_threelayers(tf.keras.Model):
         x = tf.math.log(x)
         return x
 
-class k4_onelayer(tf.keras.Model):
+class k4_onelayer(keras.Model):
 
     def __init__(self, n_units):
         super(k4_onelayer, self).__init__()
@@ -211,7 +211,7 @@ class k4_onelayer(tf.keras.Model):
         x = tf.math.log(x)
         return x
 
-class k4_twolayers(tf.keras.Model):
+class k4_twolayers(keras.Model):
 
     def __init__(self, n_units):
         super(k4_twolayers, self).__init__()
