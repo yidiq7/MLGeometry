@@ -92,8 +92,10 @@ class SquareDense(keras.layers.Layer):
     def __init__(self, input_dim, units, activation=tf.square, trainable=True):
         super(SquareDense, self).__init__()
         w_init = tf.random_normal_initializer(mean=0.0, stddev=0.05)
-        self.w = tf.Variable(
-            initial_value=tf.math.abs(w_init(shape=(input_dim, units), dtype='float32')),
+        self.w = self.add_weight(
+            shape=(input_dim, units),
+            initializer=tf.keras.initializers.Constant(
+                        tf.math.abs(w_init(shape=(input_dim, units), dtype='float32'))),
             #initial_value=w_init(shape=(input_dim, units), dtype='float32'),
             trainable=trainable,
         )
@@ -120,8 +122,9 @@ class WidthOneDense(keras.layers.Layer):
         mask = tf.cast(tf.linalg.band_part(tf.ones([dim, dim]),0,-1), dtype=tf.bool)
         upper_tri = tf.boolean_mask(tf.eye(dim), mask)
         w_init = tf.reshape(tf.concat([upper_tri, tf.zeros(input_dim - len(upper_tri))], axis=0), [-1, 1])
-        self.w = tf.Variable(
-            initial_value=w_init,
+        self.w = self.add_weight(
+            shape=(input_dim, units),
+            initializer=tf.keras.initializer(w_init),
             trainable=trainable,
         )
         self.activation =  activations.get(activation)
