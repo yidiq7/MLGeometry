@@ -5,11 +5,7 @@ Higher dimensional computational geometry using machine learning software
 - Kahler geometry and Kahler-Einstein metrics
 
 More to come.
-## Set up the environment (Temporary Fix):
 
-    conda create -n MLGeometry python=3.11 pip sympy matplotlib
-    conda activate MLGeometry
-    pip install tensorflow[and-cuda] tensorflow-probability
     
 ## Set up the environment
 
