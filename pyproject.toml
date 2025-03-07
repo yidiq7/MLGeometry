@@ -1,0 +1,27 @@
+[build-system]
+requires = ["setuptools", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "MLGeometry"
+readme = "README.md"
+description = "Higher dimensional computational geometry using machine learning software"
+requires-python = ">=3.11"
+version = "1.2.0"
+dependencies = [
+    "tensorflow-probability[tf]",
+    "sympy",
+    "matplotlib"
+]
+license = "MIT"
+maintainers = [
+    {name = "Yidi Qi", email = "qiyidi2012@gmail.com"}
+]
+
+[project.urls]
+Homepage = "https://github.com/yidiq7/MLGeometry"
+Changelog = "https://github.com/yidiq7/MLGeometry/blob/master/CHANGELOG.md"
+
+[tool.setuptools]
+packages = ["MLGeometry"]
+package-dir = {"" = "src"}

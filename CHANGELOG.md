@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+## [1.2.0] - 2025-03-07
+
+### Changed
+
+- Updated the package to be compatible with the lastest version of Tensorflow (2.18) and Keras 3
+- The package can now be installed by pip 
+- Moved the U1-invariant neural network from LOGML24 to the branch 'U1'
+
 ## [1.1.0] - 2023-11-20
 
 ### Added
@@ -39,7 +47,8 @@
 
 - Multi-batch support for L-BFGS
 
-[Unreleased]: https://github.com/yidiq7/MLGeometry/compare/v1.0.1...HEAD
+[Unreleased]: https://github.com/yidiq7/MLGeometry/compare/v1.2.0...HEAD
 [1.0.1]: https://github.com/yidiq7/MLGeometry/releases/tag/v1.0.1
 [1.0.2]: https://github.com/yidiq7/MLGeometry/releases/tag/v1.0.2
 [1.1.0]: https://github.com/yidiq7/MLGeometry/releases/tag/v1.1.0
+[1.2.0]: https://github.com/yidiq7/MLGeometry/releases/tag/v1.2.0

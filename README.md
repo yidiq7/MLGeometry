@@ -6,43 +6,63 @@ Higher dimensional computational geometry using machine learning software
 
 More to come.
 
-## Set up the environment
+## Recent Change
 
-1. Install `conda` via [Anaconda](https://www.anaconda.com/) or [Miniconda](https://docs.conda.io/en/latest/miniconda.html)
+MLGeometry has been updated to be compatible with the lastest version of TensorFlow and Keras 3, and it can now be installed directly from PyPI. If you prefer the older version, please check the 'Using and Older Version' section below.
 
-2. Install the jupyter notebook in the base environment:
+## Installation
 
-       conda install -c conda-forge notebook
-       conda install -c conda-forge nb_conda_kernels
-       conda install -c conda-forge cudatoolkit=11.8.0
+### Prerequisites
 
+MLGeometry requires Python 3.11 and TensorFlow (>=2.16).
 
-4. Create the environment with necessary packages:
+Install TensorFlow by following the official installation guide: [TensorFlow Installation](https://www.tensorflow.org/install). 
 
-       conda create -n MLGeometry pip tensorflow-probability sympy matplotlib ipykernel
+On Linux with GPU, TensorFlow can be installed by
 
-5. Activate the environment and install Tensorflow:
+    pip install 'tensorflow[and-cuda]'
 
-       conda activate MLGeometry
-       python3 -m pip install nvidia-cudnn-cu11==8.6.0.163 tensorflow==2.12.*
-       mkdir -p $CONDA_PREFIX/etc/conda/activate.d
-       echo 'CUDNN_PATH=$(dirname $(python -c "import nvidia.cudnn;print(nvidia.cudnn.__file__)"))' >> $CONDA_PREFIX/etc/conda/activate.d/env_vars.sh
-       echo 'export LD_LIBRARY_PATH=$CONDA_PREFIX/lib/:$CUDNN_PATH/lib:$LD_LIBRARY_PATH' >> $CONDA_PREFIX/etc/conda/activate.d/env_vars.sh
-       source $CONDA_PREFIX/etc/conda/activate.d/env_vars.sh
+### Installing MLGeometry
 
-6. Verify install:
-   
-       python3 -c "import tensorflow as tf; print(tf.config.list_physical_devices('GPU'))"
+You can install MLGeometry using one of the following methods:
 
-7. Open Jupyter with `jupyter-notebook` in the command line, and change the kernel in Kernel -> Change kernel -> Python [conda env:MLGeometry]
+#### Via PyPI
 
-8. Clone the repository
+    pip install ML-Geometry
 
-       git clone https://github.com/yidiq7/MLGeometry/
+*Note: Use "ML-Geometry" with a hyphen when installing via pip, not "MLGeometry".*
 
-   Or download the released version [here](https://github.com/yidiq7/MLGeometry/releases) 
+#### Directly from Github
 
-## [Sample jupyter notebook](https://github.com/yidiq7/MLGeometry/blob/master/Guide.ipynb)
+    pip install git+https://github.com/yidiq7/MLGeometry.git
+
+#### Using an Older Version
+
+If you prefer to use an older version of MLGeometry based on Tensorflow 2.12 and Keras 2, you can check out the previous release (v1.1.0) here: [Version 1.1.0 Release](https://github.com/yourusername/MLGeometry/releases/tag/v1.1.0). Follow the installation instructions provided in that release's documentation. The corresponding version of Python and CUDA can be found [here](https://www.tensorflow.org/install/source#gpu).
 
 
-## [Leaderboard](https://github.com/yidiq7/MLGeometry/blob/master/Leaderboard.md)
+## [Sample jupyter notebook](https://github.com/yidiq7/MLGeometry/blob/main/Guide.ipynb)
+
+Or open it in Google Colab: [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/yidiq7/blob/main/Guide.ipynb)
+
+## Citation
+
+You can find our paper on [arxiv](https://arxiv.org/abs/2012.04797) or [PMLR](https://proceedings.mlr.press/v145/douglas22a.html). 
+If you find our paper or package useful in your research or project, please cite it as follows:
+
+```
+@InProceedings{pmlr-v145-douglas22a,
+  title =    {Numerical Calabi-Yau metrics from holomorphic networks},
+  author =       {Douglas, Michael and Lakshminarasimhan, Subramanian and Qi, Yidi},
+  booktitle =    {Proceedings of the 2nd Mathematical and Scientific Machine Learning Conference},
+  pages =    {223--252},
+  year =     {2022},
+  editor =   {Bruna, Joan and Hesthaven, Jan and Zdeborova, Lenka},
+  volume =   {145},
+  series =   {Proceedings of Machine Learning Research},
+  month =    {16--19 Aug},
+  publisher =    {PMLR},
+  pdf =      {https://proceedings.mlr.press/v145/douglas22a/douglas22a.pdf},
+  url =      {https://proceedings.mlr.press/v145/douglas22a.html},
+}
+```
