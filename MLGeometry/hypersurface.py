@@ -10,7 +10,7 @@ import tensorflow as tf
 __all__ = ['Hypersurface', 'RealHypersurface', 'diff', 'diff_conjugate']
 
 class Hypersurface():
-    """A hypersurface or patch defined both symbolically and numerically.   
+    r"""A hypersurface or patch defined both symbolically and numerically.
 
     The Hypersuface class contains the symbolic polynomial representation of a
     hypersurface in sympy. It is also numerically defined as a collection of
