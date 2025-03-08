@@ -28,9 +28,9 @@ You can install MLGeometry using one of the following methods:
 
 #### Via PyPI
 
-    pip install ML-Geometry
+    pip install MLGeometry-tf
 
-*Note: Use "ML-Geometry" with a hyphen when installing via pip, not "MLGeometry".*
+*Note: Use "MLGeometry-tf" with a suffix when installing via pip.*
 
 #### Directly from Github
 
