@@ -13,7 +13,7 @@ dependencies = [
     "sympy",
     "matplotlib"
 ]
-license = "MIT"
+license = { file = "LICENSE" }
 maintainers = [
     {name = "Yidi Qi", email = "qiyidi2012@gmail.com"}
 ]
