@@ -2,6 +2,13 @@
 
 ## [Unreleased]
 
+
+## [1.2.1] - 2025-06-25
+
+### Changed
+
+- Fixed a bug that crashes the code when the solver can't find a solution to the polynomial
+
 ## [1.2.0] - 2025-03-07
 
 ### Changed
@@ -52,3 +59,4 @@
 [1.0.2]: https://github.com/yidiq7/MLGeometry/releases/tag/v1.0.2
 [1.1.0]: https://github.com/yidiq7/MLGeometry/releases/tag/v1.1.0
 [1.2.0]: https://github.com/yidiq7/MLGeometry/releases/tag/v1.2.0
+[1.2.1]: https://github.com/yidiq7/MLGeometry/releases/tag/v1.2.1
