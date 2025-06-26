@@ -7,7 +7,7 @@ name = "MLGeometry-tf"
 readme = "README.md"
 description = "Higher dimensional computational geometry using machine learning software"
 requires-python = ">=3.11"
-version = "1.2.0"
+version = "1.2.2"
 dependencies = [
     "tensorflow-probability[tf]",
     "sympy",
