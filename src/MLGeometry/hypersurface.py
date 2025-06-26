@@ -175,10 +175,14 @@ class Hypersurface():
     def solve_poly(zpair, coeff):
         # For each zpair there are d solutions, where d is the n_dim
         points_d = []
-        c_solved = mpmath.polyroots(coeff) 
-        for pram_c in c_solved:
-            points_d.append([complex(pram_c * a + b)
-                             for (a, b) in zip(zpair[0], zpair[1])])
+        try:
+            c_solved = mpmath.polyroots(coeff) 
+            for pram_c in c_solved:
+                points_d.append([complex(pram_c * a + b)
+                                 for (a, b) in zip(zpair[0], zpair[1])])
+        except Exception as e:
+            pass
+            
         return points_d
     
     def autopatch(self):
