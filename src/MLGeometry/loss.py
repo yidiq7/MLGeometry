@@ -13,6 +13,7 @@ __all__ = [
     'max_error', 
     'MAPE_plus_max_error',
     'compute_loss',
+    'compute_cy_metric',
     'make_full_dataset_loss_fn'
 ]
 
@@ -41,7 +42,40 @@ def MAPE_plus_max_error(y_true: jnp.ndarray, y_pred: jnp.ndarray, mass: jnp.ndar
     return max_error(y_true, y_pred, mass) + weighted_MAPE(y_true, y_pred, mass)
 
 
-# --- Core Loss Logic ---
+# --- Core Logic ---
+
+def compute_cy_metric(params: Any, batch: dict, model: Any) -> jnp.ndarray:
+    """
+    Computes the Calabi-Yau metric tensor g_{i j_bar} for a batch of points.
+    
+    Args:
+        params: Model parameters.
+        batch: Dictionary containing 'points' and 'restriction'.
+        model: Flax model instance.
+        
+    Returns:
+        Complex array of shape (N, n_man, n_man) representing the metric on the hypersurface.
+    """
+    points = batch['points']
+    restriction = batch['restriction']
+    
+    def scalar_potential(z):
+        # z shape: (d,) -> add batch dim (1, d)
+        z_batch = z[None, :]
+        out = model.apply(params, z_batch)
+        return jnp.real(out[0, 0])
+
+    # 1. Compute Hessians (N, d_amb, d_amb)
+    hessians = jax.vmap(lambda z: complex_math.complex_hessian(scalar_potential, z))(points)
+    
+    # 2. Restrict metric to hypersurface (N, d_man, d_man)
+    # G_restricted = R @ G_ambient @ R^H
+    restriction_dag = jnp.swapaxes(jnp.conj(restriction), -1, -2)
+    temp = jnp.matmul(restriction, hessians)
+    metric_restricted = jnp.matmul(temp, restriction_dag)
+    
+    return metric_restricted
+
 
 def compute_loss(params: Any, 
                  batch: dict, 
@@ -50,29 +84,16 @@ def compute_loss(params: Any,
     """
     Computes the loss for a given batch of data (Local Normalization).
     """
-    points = batch['points']
     omega_omegabar = batch['Omega_Omegabar']
     mass = batch['mass']
-    restriction = batch['restriction']
-    restriction_dag = jnp.swapaxes(jnp.conj(restriction), -1, -2)
-
-    def scalar_potential(p: Any, z: jnp.ndarray) -> float:
-        z_batch = z[None, :]
-        out = model.apply(p, z_batch)
-        return jnp.real(out[0, 0])
-
-    # 1. Compute Hessians
-    pot_fn = lambda z: scalar_potential(params, z)
-    hessians = jax.vmap(lambda z: complex_math.complex_hessian(pot_fn, z))(points)
     
-    # 2. Restrict metric
-    temp = jnp.matmul(restriction, hessians)
-    metric_restricted = jnp.matmul(temp, restriction_dag)
+    # Reuse the metric computation logic
+    metric_restricted = compute_cy_metric(params, batch, model)
     
-    # 3. Compute determinant (Volume Form)
+    # Compute determinant (Volume Form)
     det_vol = jnp.real(jax.vmap(jnp.linalg.det)(metric_restricted))
     
-    # 4. Normalize (Local Batch Normalization)
+    # Normalize (Local Batch Normalization)
     weights = mass / jnp.sum(mass)
     factor = jnp.sum(weights * det_vol / omega_omegabar)
     det_omega = det_vol / factor
@@ -84,19 +105,7 @@ def _compute_unnormalized_volumes(params, batch, model):
     """
     Computes unnormalized volume determinants. Helper for accumulated gradients.
     """
-    points = batch['points']
-    restriction = batch['restriction']
-    restriction_dag = jnp.swapaxes(jnp.conj(restriction), -1, -2)
-
-    def scalar_potential(p, z):
-        z_batch = z[None, :]
-        out = model.apply(p, z_batch)
-        return jnp.real(out[0, 0])
-
-    pot_fn = lambda z: scalar_potential(params, z)
-    hessians = jax.vmap(lambda z: complex_math.complex_hessian(pot_fn, z))(points)
-    
-    metric_restricted = jnp.matmul(jnp.matmul(restriction, hessians), restriction_dag)
+    metric_restricted = compute_cy_metric(params, batch, model)
     return jnp.real(jax.vmap(jnp.linalg.det)(metric_restricted))
 
 
