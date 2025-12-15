@@ -221,8 +221,7 @@ def main():
             print(f"Using mini-batch training with batch size: {args.batch_size}")
             # Convert numpy arrays in dataset to jax arrays and store as PyTree
             # This allows jax.random.permutation and subsequent splitting.
-            train_data_jax = jax.tree_util.tree_map(jnp.array, train_data)
-            num_train_points = train_data_jax['points'].shape[0]
+            num_train_points = train_data['points'].shape[0]
             num_batches = (num_train_points + args.batch_size - 1) // args.batch_size
 
             @jax.jit
@@ -238,7 +237,7 @@ def main():
             for epoch in range(args.max_epochs):
                 rng, perm_rng = jax.random.split(rng)
                 permutation = jax.random.permutation(perm_rng, num_train_points)
-                shuffled_data = jax.tree_util.tree_map(lambda x: x[permutation], train_data_jax)
+                shuffled_data = jax.tree_util.tree_map(lambda x: x[permutation], train_data)
 
                 epoch_loss = 0.0
                 for i in range(num_batches):

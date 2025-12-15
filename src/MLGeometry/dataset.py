@@ -5,24 +5,19 @@ Data loading and processing utilities.
 import numpy as np
 import jax.numpy as jnp
 
-__all__ = ['generate_dataset', 'dataset_on_patch']
+__all__ = ['generate_dataset', 'dataset_on_patch', 'to_jax']
 
 
-def generate_dataset(patch) -> dict:
+def generate_dataset(patch, jax: bool = True) -> dict:
     """
     Generates a consolidated dataset from a Hypersurface object and its patches.
     
     Args:
         patch: A Hypersurface object (root).
+        jax: If True (default), converts the dataset to JAX arrays before returning.
         
     Returns:
-        A dictionary containing concatenated arrays:
-        {
-            'points': (N, d) complex,
-            'Omega_Omegabar': (N,) float,
-            'mass': (N,) float,
-            'restriction': (N, d_man, d_amb) complex
-        }
+        A dictionary containing concatenated arrays (NumPy or JAX).
     """
     # Collect all leaf patches that contain points
     leaf_patches = _collect_leaf_patches(patch)
@@ -46,7 +41,28 @@ def generate_dataset(patch) -> dict:
     for key in keys:
         merged_dataset[key] = np.concatenate([d[key] for d in datasets], axis=0)
         
+    if jax:
+        return to_jax(merged_dataset)
     return merged_dataset
+
+
+def to_jax(dataset: dict) -> dict:
+    """
+    Converts a dataset dictionary of NumPy arrays to JAX arrays with appropriate types.
+    Use this before passing data to JAX training loops to move data to device.
+    
+    Args:
+        dataset: Dictionary containing numpy arrays.
+        
+    Returns:
+        Dictionary containing JAX arrays.
+    """
+    return {
+        'points': jnp.array(dataset['points'], dtype=jnp.complex64),
+        'Omega_Omegabar': jnp.array(dataset['Omega_Omegabar'], dtype=jnp.float32),
+        'mass': jnp.array(dataset['mass'], dtype=jnp.float32),
+        'restriction': jnp.array(dataset['restriction'], dtype=jnp.complex64)
+    }
 
 
 def _collect_leaf_patches(patch) -> list:
