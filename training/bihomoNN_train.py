@@ -177,13 +177,17 @@ def main():
         """Calculates a specified metric over a dataset."""
         # Use batched evaluation for memory efficiency (Global Normalization)
         eval_batch_size = 2048
-        temp_loss_fn = mlg_lbfgs.create_loss_fn(model, dataset, metric_fn, batch_size=eval_batch_size)
-        return temp_loss_fn(current_params)
+        temp_loss_fn = mlg_loss.make_full_dataset_loss_fn(model, dataset, metric_fn, batch_size=eval_batch_size)
+        
+        # JIT the returned function for performance
+        jitted_eval_fn = jax.jit(temp_loss_fn)
+        
+        return jitted_eval_fn(current_params)
 
     if args.optimizer.lower() == 'lbfgs':
         # L-BFGS always uses the full batch
         print(f"Using L-BFGS optimizer for {args.max_epochs} iterations.")
-        full_batch_loss_fn = mlg_lbfgs.create_loss_fn(model, train_data, loss_metric)
+        full_batch_loss_fn = mlg_loss.make_full_dataset_loss_fn(model, train_data, loss_metric)
         lbfgs_solver = mlg_lbfgs.LBFGS(full_batch_loss_fn, max_iter=args.max_epochs, tol=1e-7)
         params, _ = lbfgs_solver.run(params)
         final_loss = full_batch_loss_fn(params)
@@ -225,7 +229,7 @@ def main():
             def minibatch_step(current_params: Any, current_opt_state: optax.OptState, batch: Dict[str, jnp.ndarray]) -> Tuple[Any, optax.OptState, jnp.ndarray]:
                 """Performs a single mini-batch optimization step."""
                 # Create loss_fn for this batch
-                batch_loss_fn = mlg_lbfgs.create_loss_fn(model, batch, loss_metric)
+                batch_loss_fn = mlg_loss.make_full_dataset_loss_fn(model, batch, loss_metric)
                 loss_val, grads = jax.value_and_grad(batch_loss_fn)(current_params)
                 updates, new_opt_state = optimizer.update(grads, current_opt_state, current_params)
                 new_params = optax.apply_updates(current_params, updates)
@@ -251,7 +255,7 @@ def main():
 
         else: # Full batch training for Adam/SGD
             print("Using full-batch training.")
-            full_batch_loss_fn = mlg_lbfgs.create_loss_fn(model, train_data, loss_metric)
+            full_batch_loss_fn = mlg_loss.make_full_dataset_loss_fn(model, train_data, loss_metric)
 
             @jax.jit
             def full_batch_step(current_params: Any, current_opt_state: optax.OptState) -> Tuple[Any, optax.OptState, jnp.ndarray]:
