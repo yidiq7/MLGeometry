@@ -36,11 +36,11 @@ class Hypersurface():
         if points is None:
             # Generate points if not provided
             points_list = self.solve_points(n_pairs)
-            self.points = np.array(points_list, dtype=np.complex128)
+            self.points = np.array(points_list, dtype=np.complex64)
             self.autopatch()
         else:
             # Convert provided points to numpy array
-            self.points = np.array(points, dtype=np.complex128)
+            self.points = np.array(points, dtype=np.complex64)
             
         self.n_points = len(self.points)
         self.grad = self.get_grad()

@@ -90,9 +90,9 @@ class CICYHypersurface(Hypersurface):
             
             # Reconstruct point in CP^N
             # z = t0*z0 + t1*z1 + z2 (where z0,z1,z2 are the trio vectors)
-            t_array = np.array(t_solved.tolist(), dtype=np.complex128)
+            t_array = np.array(t_solved.tolist(), dtype=np.complex64)
             # Add 1.0 for the constant term corresponding to z2
-            t_weights = np.array([t_array[0], t_array[1], 1.0], dtype=np.complex128)
+            t_weights = np.array([t_array[0], t_array[1], 1.0], dtype=np.complex64)
             
             # ztrio is (3, n_dim)
             point = np.dot(t_weights, np.array(ztrio))
