@@ -1,139 +1,97 @@
-#! /usr/bin/env python
-# -*- coding: utf-8 -*-
-# vim:fenc=utf-8
-#
-# Distributed under terms of the MIT license.
-
-"""An example of using tfp.optimizer.lbfgs_minimize to optimize a TensorFlow model.
-
-This code shows a naive way to wrap a tf.keras.Model and optimize it with the L-BFGS
-optimizer from TensorFlow Probability.
-
-Python interpreter version: 3.6.9
-TensorFlow version: 2.0.0
-TensorFlow Probability version: 0.8.0
-NumPy version: 1.17.2
-Matplotlib version: 3.1.1
 """
-import numpy as np
-import tensorflow as tf
-import tensorflow_probability as tfp
-from matplotlib import pyplot
-from . import complex_math 
+Optimization utilities, including L-BFGS wrapper and loss closure generation.
+"""
 
-__all__ = ['function_factory']
+from typing import Callable, Any, Tuple
+import jax
+import jax.numpy as jnp
+import jaxopt
+from . import complex_math
 
-def function_factory(model, loss, dataset):
-    """A factory to create a function required by tfp.optimizer.lbfgs_minimize.
+__all__ = ['create_loss_fn', 'LBFGS']
 
-    Args:
-        model [in]: an instance of `tf.keras.Model` or its subclasses.
-        loss [in]: a function with signature loss_value = loss(pred_y, true_y).
-        train_x [in]: the input part of training data.
-        train_y [in]: the output part of training data.
 
-    Returns:
-        A function that has a signature of:
-            loss_value, gradients = f(model_parameters).
+def create_loss_fn(model: Any, 
+                   dataset: dict, 
+                   loss_metric: Callable[[jnp.ndarray, jnp.ndarray, jnp.ndarray], jnp.ndarray]) -> Callable:
     """
+    Creates a JIT-compatible loss function closing over the dataset and model structure.
+    
+    The returned function takes `params` and returns a scalar loss.
+    Internally, it computes the Calabi-Yau volume form (Monge-Ampere equation).
+    """
+    
+    # Pre-extract and cast data to JAX arrays to avoid overhead in the loop
+    points = jnp.array(dataset['points'], dtype=jnp.complex64)
+    omega_omegabar = jnp.array(dataset['Omega_Omegabar'], dtype=jnp.float32)
+    mass = jnp.array(dataset['mass'], dtype=jnp.float32)
+    restriction = jnp.array(dataset['restriction'], dtype=jnp.complex64)
+    
+    # Pre-calculate restriction adjoint for efficiency
+    # shape: (N, n_embed, n_manifold)
+    restriction_dag = jnp.swapaxes(jnp.conj(restriction), -1, -2)
 
-    # obtain the shapes of all trainable parameters in the model
-    shapes = tf.shape_n(model.trainable_variables)
-    n_tensors = len(shapes)
+    def scalar_potential(params: Any, z: jnp.ndarray) -> float:
+        """Evaluates the neural network potential at a single point z."""
+        # z shape: (d,) -> add batch dim (1, d)
+        z_batch = z[None, :]
+        # Output shape (1, 1), extract scalar
+        out = model.apply(params, z_batch)
+        return jnp.real(out[0, 0])
 
-    # we'll use tf.dynamic_stitch and tf.dynamic_partition later, so we need to
-    # prepare required information first
-    count = 0
-    idx = [] # stitch indices
-    part = [] # partition indices
+    def volume_form_batch(params: Any) -> jnp.ndarray:
+        """Computes the numerical volume form det(g) for the entire batch."""
+        
+        # 1. Compute Hessians of the potential
+        # We need a function of z with params fixed for autodiff
+        pot_fn = lambda z: scalar_potential(params, z)
+        
+        # vmap over points to get batch of Hessians
+        # complex_hessian returns (d, d) matrix
+        # hessians shape: (N, d, d)
+        hessians = jax.vmap(lambda z: complex_math.complex_hessian(pot_fn, z))(points)
+        
+        # 2. Restrict metric to the hypersurface tangent bundle
+        # g_restricted = R @ g_ambient @ R^H
+        # (N, n_man, n_amb) @ (N, n_amb, n_amb) -> (N, n_man, n_amb)
+        temp = jnp.matmul(restriction, hessians)
+        # (N, n_man, n_amb) @ (N, n_amb, n_man) -> (N, n_man, n_man)
+        metric_restricted = jnp.matmul(temp, restriction_dag)
+        
+        # 3. Compute determinant
+        det_vol = jax.vmap(jnp.linalg.det)(metric_restricted)
+        det_vol = jnp.real(det_vol)
+        
+        # 4. Normalize
+        # The integration of the volume form should equal the integration of Omega_Omegabar (Volume).
+        # We enforce this by a normalization factor calculated batch-wise (or global if full batch).
+        weights = mass / jnp.sum(mass)
+        
+        # We want Int(det_vol) = Int(Omega_Omegabar)
+        # Factor C = Int(det_vol) / Int(Omega_Omegabar) is roughly computed here?
+        # Original logic: factor = sum(weights * det_g / Omega_Omegabar)
+        # This calculates the mean ratio weighted by mass.
+        factor = jnp.sum(weights * det_vol / omega_omegabar)
+        
+        return det_vol / factor
 
-    for i, shape in enumerate(shapes):
-        n = np.prod(shape)
-        idx.append(tf.reshape(tf.range(count, count+n, dtype=tf.int32), shape))
-        part.extend([i]*n)
-        count += n
-
-    part = tf.constant(part)
-
-    @tf.function
-    @tf.autograph.experimental.do_not_convert
-    def assign_new_model_parameters(params_1d):
-        """A function updating the model's parameters with a 1D tf.Tensor.
-
-        Args:
-            params_1d [in]: a 1D tf.Tensor representing the model's trainable parameters.
-        """
-
-        params = tf.dynamic_partition(params_1d, part, n_tensors)
-        for i, (shape, param) in enumerate(zip(shapes, params)):
-            model.trainable_variables[i].assign(tf.reshape(param, shape))
-            #tf.print(model.trainable_variables[i])
-
-    @tf.function
-    def volume_form(x, Omega_Omegabar, mass, restriction):
-        kahler_metric = complex_math.complex_hessian(tf.math.real(model(x)), x)
-        volume_form = tf.math.real(tf.linalg.det(tf.matmul(restriction, tf.matmul(kahler_metric, restriction, adjoint_b=True))))
-        weights = mass / tf.reduce_sum(mass)
-        factor = tf.reduce_sum(weights * volume_form / Omega_Omegabar)
-        #factor = tf.constant(35.1774, dtype=tf.complex64)
-        return volume_form / factor
+    def loss_fn(params: Any) -> jnp.ndarray:
+        det_omega = volume_form_batch(params)
+        return loss_metric(omega_omegabar, det_omega, mass)
+        
+    return loss_fn
 
 
-    # now create a function that will be returned by this factory
-    def f(params_1d):
-        """A function that can be used by tfp.optimizer.lbfgs_minimize.
+class LBFGS:
+    """Wrapper for JAXopt L-BFGS solver."""
+    
+    def __init__(self, loss_fn: Callable, max_iter: int = 1000, tol: float = 1e-5):
+        self.loss_fn = loss_fn
+        self.max_iter = max_iter
+        self.tol = tol
+        self.solver = jaxopt.LBFGS(fun=loss_fn, maxiter=max_iter, tol=tol)
 
-        This function is created by function_factory.
-
-        Args:
-           params_1d [in]: a 1D tf.Tensor.
-
-        Returns:
-            A scalar loss and the gradients w.r.t. the `params_1d`.
-        """
-
-        # use GradientTape so that we can calculate the gradient of loss w.r.t. parameters
-        for step, (points, Omega_Omegabar, mass, restriction) in enumerate(dataset):
-            with tf.GradientTape() as tape:
-                # update the parameters in the model
-                assign_new_model_parameters(params_1d)
-                # calculate the loss
-                det_omega = volume_form(points, Omega_Omegabar, mass, restriction)
-                loss_value = loss(Omega_Omegabar, det_omega, mass)
-
-            # calculate gradients and convert to 1D tf.Tensor
-            grads = tape.gradient(loss_value, model.trainable_variables)
-            grads = tf.dynamic_stitch(idx, grads)
-          
-            # reweight the loss and grads 
-            mass_sum = tf.reduce_sum(mass) 
-            try:
-                total_loss += loss_value * mass_sum 
-                total_grads += grads * mass_sum
-                total_mass += mass_sum
-            except NameError:
-                total_loss = loss_value * mass_sum 
-                total_grads = grads * mass_sum
-                total_mass = mass_sum
-
-        total_loss = total_loss / total_mass
-        total_grads = total_grads / total_mass
-
-        # print out iteration & loss
-        f.iter.assign_add(1)
-        tf.print("Iter:", f.iter, "loss:", total_loss)
-
-        # store loss value so we can retrieve later
-        tf.py_function(f.history.append, inp=[total_loss], Tout=[])
-
-        return total_loss, total_grads
-
-    # store these information as members so we can use them outside the scope
-    f.iter = tf.Variable(0)
-    f.idx = idx
-    f.part = part
-    f.shapes = shapes
-    f.assign_new_model_parameters = assign_new_model_parameters
-    f.history = []
-
-    return f
+    def run(self, init_params: Any) -> Tuple[Any, Any]:
+        """Runs the optimization."""
+        res = self.solver.run(init_params)
+        return res.params, res.state

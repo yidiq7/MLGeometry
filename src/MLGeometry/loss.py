@@ -1,26 +1,30 @@
-import tensorflow as tf
-import keras
+"""
+Loss functions for Calabi-Yau metric learning.
+"""
 
-__all__ = ['weighted_MAPE','weighted_MSE','max_error','MAPE_plus_max_error']
+import jax.numpy as jnp
 
-@keras.saving.register_keras_serializable(package="MLGeometry")
-def weighted_MAPE(y_true, y_pred, mass):
-    weights = mass / tf.reduce_sum(mass)
-    return tf.reduce_sum(tf.abs(y_true - y_pred) / y_true * weights)
+__all__ = ['weighted_MAPE', 'weighted_MSE', 'max_error', 'MAPE_plus_max_error']
 
 
-@keras.saving.register_keras_serializable(package="MLGeometry")
-def weighted_MSE(y_true, y_pred, mass):
-    weights = mass / tf.reduce_sum(mass)
-    return tf.reduce_sum(tf.square(y_pred / y_true - 1) * weights)
+def weighted_MAPE(y_true: jnp.ndarray, y_pred: jnp.ndarray, mass: jnp.ndarray) -> jnp.ndarray:
+    """Weighted Mean Absolute Percentage Error."""
+    weights = mass / jnp.sum(mass)
+    return jnp.sum(jnp.abs(y_true - y_pred) / y_true * weights)
 
 
-@keras.saving.register_keras_serializable(package="MLGeometry")
-def max_error(y_true, y_pred, mass):
-    return tf.math.reduce_max(tf.abs(y_true - y_pred) / y_true)
+def weighted_MSE(y_true: jnp.ndarray, y_pred: jnp.ndarray, mass: jnp.ndarray) -> jnp.ndarray:
+    """Weighted Mean Squared Error (of the ratio - 1)."""
+    weights = mass / jnp.sum(mass)
+    return jnp.sum(jnp.square(y_pred / y_true - 1) * weights)
 
 
-@keras.saving.register_keras_serializable(package="MLGeometry")
-def MAPE_plus_max_error(y_true, y_pred, mass):
-    return 1*max_error(y_true, y_pred, mass) + weighted_MAPE(y_true, y_pred, mass)
+def max_error(y_true: jnp.ndarray, y_pred: jnp.ndarray, mass: jnp.ndarray) -> jnp.ndarray:
+    """Maximum relative error."""
+    # Note: mass is unused but kept for interface consistency
+    return jnp.max(jnp.abs(y_true - y_pred) / y_true)
 
+
+def MAPE_plus_max_error(y_true: jnp.ndarray, y_pred: jnp.ndarray, mass: jnp.ndarray) -> jnp.ndarray:
+    """Combination of MAPE and Max Error."""
+    return max_error(y_true, y_pred, mass) + weighted_MAPE(y_true, y_pred, mass)

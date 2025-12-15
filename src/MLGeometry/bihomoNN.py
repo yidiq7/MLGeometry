@@ -1,145 +1,217 @@
-import keras
-from keras import activations
-import numpy as np 
-import tensorflow as tf
+"""
+Bihomogeneous Neural Network layers using Flax.
 
-__all__ = ['Bihomogeneous','Bihomogeneous_k2','Bihomogeneous_k3',
-           'Bihomogeneous_k4','SquareDense','WidthOneDense']
+These layers are designed to approximate sections of line bundles on complex manifolds,
+enforcing bihomogeneous properties required for the Kähler potential.
+"""
 
-@keras.saving.register_keras_serializable(package="MLGeometry")
-class Bihomogeneous(keras.layers.Layer):
-    '''A layer transform zi to zi*zjbar'''
-    def __init__(self, d=5):
-        super(Bihomogeneous, self).__init__()
-        self.d = d
+from typing import Callable, Optional
+import jax
+import jax.numpy as jnp
+from flax import linen as nn
 
-    def call(self, inputs):
-        zzbar = tf.einsum('ai,aj->aij', inputs, tf.math.conj(inputs))
-        zzbar = tf.linalg.band_part(zzbar, 0, -1)
-        zzbar = tf.reshape(zzbar, [-1, self.d**2])
-        zzbar = tf.concat([tf.math.real(zzbar), tf.math.imag(zzbar)], axis=1)
-        return remove_zero_entries(zzbar)
+__all__ = [
+    'Bihomogeneous',
+    'Bihomogeneous_k2',
+    'Bihomogeneous_k3',
+    'Bihomogeneous_k4',
+    'SquareDense',
+    'WidthOneDense'
+]
 
 
-@keras.saving.register_keras_serializable(package="MLGeometry")
-class Bihomogeneous_k2(keras.layers.Layer):
-    '''A layer transform zi to symmetrized zi1*zi2, then to zi1*zi2 * zi1zi2bar'''
-    def __init__(self):
-        super(Bihomogeneous_k2, self).__init__()
+class Bihomogeneous(nn.Module):
+    """
+    Transforms input vector z to the set of bihomogeneous monomials z_i * z_j_bar.
+    
+    Output effectively represents the upper triangular part of the Hermitian matrix z @ z^H.
+    """
+    d: int = 5
+
+    @nn.compact
+    def __call__(self, inputs: jnp.ndarray) -> jnp.ndarray:
+        """
+        Args:
+            inputs: Complex array of shape (..., d).
+            
+        Returns:
+            Real array of shape (..., d*(d+1)).
+            Contains [Real(triu), Imag(triu)].
+        """
+        # Outer product: z_i * conj(z_j)
+        # Shape: (..., d, d)
+        zzbar = jnp.einsum('...i,...j->...ij', inputs, jnp.conj(inputs))
         
-    def call(self, inputs):
-        # zi to zi1*zi2 
-        zz = tf.einsum('ai,aj->aij', inputs, inputs)
-        zz = tf.linalg.band_part(zz, 0, -1) # zero below upper triangular
-        zz = tf.reshape(zz, [-1, 5**2])
-        zz = tf.reshape(remove_zero_entries(zz), [-1, 15])
-     
-        # zi1*zi2 to zzbar
-        zzbar = tf.einsum('ai,aj->aij', zz, tf.math.conj(zz))
-        zzbar = tf.linalg.band_part(zzbar, 0, -1)
-        zzbar = tf.reshape(zzbar, [-1, 15**2])
-        zzbar = tf.concat([tf.math.real(zzbar), tf.math.imag(zzbar)], axis=1)
-        return remove_zero_entries(zzbar)
+        # Extract upper triangular indices (including diagonal)
+        rows, cols = jnp.triu_indices(self.d)
+        
+        # Flattened upper triangular part
+        # Shape: (..., n_triu)
+        zzbar_flat = zzbar[..., rows, cols] 
+        
+        # Concatenate Real and Imaginary parts
+        # Note: Diagonal elements are real, so imag part is 0, but kept for structural consistency
+        return jnp.concatenate([jnp.real(zzbar_flat), jnp.imag(zzbar_flat)], axis=-1)
 
 
-@keras.saving.register_keras_serializable(package="MLGeometry")
-class Bihomogeneous_k3(keras.layers.Layer):
-    '''A layer transform zi to symmetrized zi1*zi2*zi3, then to zzbar'''
-    def __init__(self):
-        super(Bihomogeneous_k3, self).__init__()
+class Bihomogeneous_k2(nn.Module):
+    """
+    Transforms z to symmetrized degree-2 monomials (z_i * z_j), then computes
+    the bihomogeneous product with its conjugate.
+    """
+    d: int = 5
 
-    def call(self, inputs):
-        zz = tf.einsum('ai,aj,ak->aijk', inputs, inputs, inputs)
-        zz = tf.linalg.band_part(zz, 0, -1) # keep upper triangular 2/3
-        zz = tf.transpose(zz, perm=[0, 3, 1, 2])
-        zz = tf.linalg.band_part(zz, 0, -1) # keep upper triangular 1/2
-        zz = tf.transpose(zz, perm=[0, 2, 3, 1])
-        zz = tf.reshape(zz, [-1, 5**3]) 
-        zz = tf.reshape(remove_zero_entries(zz), [-1, 35])
-
-        zzbar = tf.einsum('ai,aj->aij', zz, tf.math.conj(zz))
-        zzbar = tf.linalg.band_part(zzbar, 0, -1)
-        zzbar = tf.reshape(zzbar, [-1, 35**2])
-        zzbar = tf.concat([tf.math.real(zzbar), tf.math.imag(zzbar)], axis=1)
-        return remove_zero_entries(zzbar)
-
-
-@keras.saving.register_keras_serializable(package="MLGeometry")
-class Bihomogeneous_k4(keras.layers.Layer):
-    '''A layer transform zi to symmetrized zi1*zi2*zi3*zi4, then to zzbar'''
-    def __init__(self):
-        super(Bihomogeneous_k4, self).__init__()
-
-    def call(self, inputs):
-        zz = tf.einsum('ai,aj,ak,al->aijkl', inputs, inputs, inputs, inputs)
-        zz = tf.linalg.band_part(zz, 0, -1) 
-        zz = tf.transpose(zz, perm=[0, 4, 1, 2, 3])
-        zz = tf.linalg.band_part(zz, 0, -1) 
-        zz = tf.transpose(zz, perm=[0, 4, 1, 2, 3]) # 3412
-        zz = tf.linalg.band_part(zz, 0, -1) 
-        zz = tf.reshape(zz, [-1, 5**4]) 
-        zz = tf.reshape(remove_zero_entries(zz), [-1, 70])
-
-        zzbar = tf.einsum('ai,aj->aij', zz, tf.math.conj(zz))
-        zzbar = tf.linalg.band_part(zzbar, 0, -1)
-        zzbar = tf.reshape(zzbar, [-1, 70**2])
-        zzbar = tf.concat([tf.math.real(zzbar), tf.math.imag(zzbar)], axis=1)
-        return remove_zero_entries(zzbar)
+    @nn.compact
+    def __call__(self, inputs: jnp.ndarray) -> jnp.ndarray:
+        # 1. Compute symmetrized z_i * z_j
+        zz = jnp.einsum('...i,...j->...ij', inputs, inputs)
+        rows, cols = jnp.triu_indices(self.d)
+        zz_vec = zz[..., rows, cols] 
+        
+        # 2. Compute hermitian product of the result
+        n_dim_2 = zz_vec.shape[-1] 
+        zzbar = jnp.einsum('...i,...j->...ij', zz_vec, jnp.conj(zz_vec))
+        
+        rows2, cols2 = jnp.triu_indices(n_dim_2)
+        zzbar_flat = zzbar[..., rows2, cols2]
+        
+        return jnp.concatenate([jnp.real(zzbar_flat), jnp.imag(zzbar_flat)], axis=-1)
 
 
-def remove_zero_entries(x):
-    x = tf.transpose(x)
-    intermediate_tensor = tf.reduce_sum(tf.abs(x), 1)
-    bool_mask = tf.squeeze(tf.math.logical_not(tf.math.less(intermediate_tensor, 1e-3)))
-    x = tf.boolean_mask(x, bool_mask)
-    x = tf.transpose(x)
-    return x
+class Bihomogeneous_k3(nn.Module):
+    """
+    Transforms z to symmetrized degree-3 monomials (z_i * z_j * z_k), then computes
+    the bihomogeneous product.
+    """
+    d: int = 5
+
+    @nn.compact
+    def __call__(self, inputs: jnp.ndarray) -> jnp.ndarray:
+        # Generate indices for unique symmetric degree-3 tensors (i <= j <= k)
+        # We pre-calculate indices to avoid dynamic shape issues in JIT
+        indices = []
+        for i in range(self.d):
+            for j in range(i, self.d):
+                for k in range(j, self.d):
+                    indices.append((i, j, k))
+        
+        indices = tuple(jnp.array(x) for x in zip(*indices))
+        
+        # Compute full tensor then extract unique elements
+        zz = jnp.einsum('...i,...j,...k->...ijk', inputs, inputs, inputs)
+        zz_vec = zz[..., indices[0], indices[1], indices[2]]
+        
+        n_dim_3 = zz_vec.shape[-1]
+        zzbar = jnp.einsum('...i,...j->...ij', zz_vec, jnp.conj(zz_vec))
+        
+        rows3, cols3 = jnp.triu_indices(n_dim_3)
+        zzbar_flat = zzbar[..., rows3, cols3]
+        
+        return jnp.concatenate([jnp.real(zzbar_flat), jnp.imag(zzbar_flat)], axis=-1)
 
 
-@keras.saving.register_keras_serializable(package="MLGeometry")
-class SquareDense(keras.layers.Layer):
-    def __init__(self, input_dim, units, activation=tf.square, trainable=True):
-        super(SquareDense, self).__init__()
-        w_init = tf.random_normal_initializer(mean=0.0, stddev=0.05)
-        self.w = self.add_weight(
-            shape=(input_dim, units),
-            initializer=keras.initializers.Constant(
-                        tf.math.abs(w_init(shape=(input_dim, units), dtype='float32'))),
-            #initial_value=w_init(shape=(input_dim, units), dtype='float32'),
-            trainable=trainable,
-        )
-        self.activation = activations.get(activation)
+class Bihomogeneous_k4(nn.Module):
+    """
+    Transforms z to symmetrized degree-4 monomials, then computes the bihomogeneous product.
+    """
+    d: int = 5
 
-    def call(self, inputs):
-        return self.activation(tf.matmul(inputs, self.w))
+    @nn.compact
+    def __call__(self, inputs: jnp.ndarray) -> jnp.ndarray:
+        indices = []
+        for i in range(self.d):
+            for j in range(i, self.d):
+                for k in range(j, self.d):
+                    for l in range(k, self.d):
+                        indices.append((i, j, k, l))
+        
+        indices = tuple(jnp.array(x) for x in zip(*indices))
+        
+        zz = jnp.einsum('...i,...j,...k,...l->...ijkl', inputs, inputs, inputs, inputs)
+        zz_vec = zz[..., indices[0], indices[1], indices[2], indices[3]]
+        
+        n_dim_4 = zz_vec.shape[-1]
+        zzbar = jnp.einsum('...i,...j->...ij', zz_vec, jnp.conj(zz_vec))
+        
+        rows4, cols4 = jnp.triu_indices(n_dim_4)
+        zzbar_flat = zzbar[..., rows4, cols4]
+        
+        return jnp.concatenate([jnp.real(zzbar_flat), jnp.imag(zzbar_flat)], axis=-1)
 
 
-@keras.saving.register_keras_serializable(package="MLGeometry")
-class WidthOneDense(keras.layers.Layer):
-    '''
-    Usage: layer = WidthOneDense(n**2, 1)
-           where n is the number of sections for different ks
-           n = 5 for k = 1
-           n = 15 for k = 2
-           n = 35 for k = 3
-    This layer is used directly after Bihomogeneous_k layers to sum over all 
-    the terms in the previous layer. The weights are initialized so that the h
-    matrix is a real identity matrix. The training does not work if they are randomly
-    initialized.
-    '''
-    def __init__(self, input_dim, units, activation=None, trainable=True):
-        super(WidthOneDense, self).__init__()
-        dim = int(np.sqrt(input_dim))
-        mask = tf.cast(tf.linalg.band_part(tf.ones([dim, dim]),0,-1), dtype=tf.bool)
-        upper_tri = tf.boolean_mask(tf.eye(dim), mask)
-        w_init = tf.reshape(tf.concat([upper_tri, tf.zeros(input_dim - len(upper_tri))], axis=0), [-1, 1])
-        self.w = self.add_weight(
-            shape=(input_dim, units),
-            initializer=keras.initializer(w_init),
-            trainable=trainable,
-        )
-        self.activation =  activations.get(activation)
+class SquareDense(nn.Module):
+    """
+    A dense layer with a specific initialization scheme (absolute value of random normal).
+    Commonly used with square activation for positivity.
+    """
+    features: int
+    activation: Callable = lambda x: x**2
+    
+    @nn.compact
+    def __call__(self, inputs: jnp.ndarray) -> jnp.ndarray:
+        def abs_normal_init(key, shape, dtype=jnp.float32):
+            return jnp.abs(jax.random.normal(key, shape, dtype) * 0.05)
+        
+        kernel = self.param('kernel', abs_normal_init, (inputs.shape[-1], self.features))
+        
+        y = jnp.dot(inputs, kernel)
+        if self.activation:
+            y = self.activation(y)
+        return y
 
-    def call(self, inputs):
-        return self.activation(tf.matmul(inputs, self.w))
 
+class WidthOneDense(nn.Module):
+    """
+    A specialized final layer that acts as a reduction sum, initialized to mimic
+    the Fubini-Study metric (Identity matrix in implicit basis).
+    """
+    features: int = 1
+    activation: Optional[Callable] = None
+    
+    @nn.compact
+    def __call__(self, inputs: jnp.ndarray) -> jnp.ndarray:
+        input_dim = inputs.shape[-1]
+        
+        # Calculate original dimension 'dim' before bihomogeneous expansion
+        # inputs is [Real(triu), Imag(triu)]
+        # Length of triu(dim) is dim*(dim+1)/2
+        # input_dim = 2 * (dim*(dim+1)/2) = dim^2 + dim
+        # Solving for dim: dim^2 + dim - input_dim = 0
+        # This derivation is approximate; usually we know dim from context.
+        # However, the initialization logic mimics the identity matrix structure.
+        
+        # Let's reverse engineer dim from the assumption that the input represents
+        # the flattened upper triangle of a Hermitian matrix (real and imag parts).
+        # Number of unique complex elements = input_dim / 2
+        n_unique = input_dim // 2
+        # n_unique = dim * (dim + 1) / 2
+        # dim^2 + dim - 2*n_unique = 0
+        # dim = (-1 + sqrt(1 + 8*n_unique)) / 2
+        dim = int((-1 + (1 + 8 * n_unique)**0.5) / 2)
+        
+        def width_one_init(key, shape, dtype=jnp.float32):
+            # We want to select the diagonal elements of the implicit matrix.
+            # The input order is [Real(triu_indices), Imag(triu_indices)].
+            # The diagonal elements are at the start of triu_indices? 
+            # No, triu_indices order: (0,0), (0,1), (0,2)... (1,1), (1,2)...
+            # We need to find indices where row == col.
+            
+            rows, cols = jnp.triu_indices(dim)
+            is_diag = (rows == cols) # Boolean mask of length n_unique
+            
+            # Weight vector structure: [Real_weights, Imag_weights]
+            # Real_weights: 1.0 for diagonal, 0.0 for off-diagonal
+            # Imag_weights: 0.0 everywhere (diagonal of Hermitian is real)
+            
+            real_w = jnp.where(is_diag, 1.0, 0.0)
+            imag_w = jnp.zeros_like(real_w)
+            
+            w_full = jnp.concatenate([real_w, imag_w])
+            return w_full.reshape(shape)
+
+        kernel = self.param('kernel', width_one_init, (input_dim, self.features))
+        
+        y = jnp.dot(inputs, kernel)
+        if self.activation:
+            y = self.activation(y)
+        return y

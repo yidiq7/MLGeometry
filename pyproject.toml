@@ -3,15 +3,21 @@ requires = ["setuptools", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "MLGeometry-tf"
+name = "MLGeometry-jax"
 readme = "README.md"
-description = "Higher dimensional computational geometry using machine learning software"
+description = "Higher dimensional computational geometry using machine learning software (JAX backend)"
 requires-python = ">=3.11"
-version = "1.2.2"
+version = "2.0.0"
 dependencies = [
-    "tensorflow-probability[tf]",
+    "jax",
+    "jaxlib",
+    "flax",
+    "optax",
+    "jaxopt",
     "sympy",
-    "matplotlib"
+    "matplotlib",
+    "mpmath",
+    "numpy"
 ]
 license = { file = "LICENSE" }
 maintainers = [

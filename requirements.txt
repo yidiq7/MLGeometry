@@ -1,3 +1,9 @@
-"tensorflow-probability[tf]"
+jax
+jaxlib
+flax
+optax
+jaxopt
 sympy
 matplotlib
+mpmath
+numpy

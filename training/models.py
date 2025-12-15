@@ -1,230 +1,146 @@
-import tensorflow as tf
+from flax import linen as nn
+import jax.numpy as jnp
 from MLGeometry import bihomoNN as bnn
+from typing import Sequence
 
 __all__ = ['zerolayer', 'onelayer', 'twolayers', 'threelayers', 'fourlayers', 
            'fivelayers','OuterProductNN_k2','OuterProductNN_k3','OuterProductNN_k4',
            'k2_twolayers', 'k2_threelayers','k4_onelayer','k4_twolayers']
- 
-class zerolayer(keras.Model):
 
-    def __init__(self, n_units):
-        super(zerolayer, self).__init__()
-        self.bihomogeneous = bnn.Bihomogeneous()
-        self.layer1 = bnn.WidthOneDense(25, 1)
+# Helper activation
+def square_activation(x):
+    return x**2
 
-    def call(self, inputs):
-        x = self.bihomogeneous(inputs)
-        x = self.layer1(x)
-        x = tf.math.log(x)
-        return x
+class zerolayer(nn.Module):
+    n_units: Sequence[int] # Not used but for consistency with interface
 
-class onelayer(keras.Model):
+    @nn.compact
+    def __call__(self, inputs):
+        x = bnn.Bihomogeneous()(inputs)
+        x = bnn.WidthOneDense(features=1)(x)
+        return jnp.log(x)
 
-    def __init__(self, n_units):
-        super(onelayer, self).__init__()
-        self.bihomogeneous = bnn.Bihomogeneous()
-        self.layer1 = bnn.SquareDense(25, n_units[0], activation=tf.square)
-        self.layer2 = bnn.SquareDense(n_units[0], 1)
+class onelayer(nn.Module):
+    n_units: Sequence[int]
 
-    def call(self, inputs):
-        x = self.bihomogeneous(inputs)
-        x = self.layer1(x)
-        x = self.layer2(x)
-        x = tf.math.log(x)
-        return x
+    @nn.compact
+    def __call__(self, inputs):
+        x = bnn.Bihomogeneous()(inputs)
+        x = bnn.SquareDense(features=self.n_units[0], activation=square_activation)(x)
+        x = bnn.SquareDense(features=1, activation=None)(x)
+        return jnp.log(x)
 
+class twolayers(nn.Module):
+    n_units: Sequence[int]
 
-class twolayers(keras.Model):
+    @nn.compact
+    def __call__(self, inputs):
+        x = bnn.Bihomogeneous()(inputs)
+        x = bnn.SquareDense(features=self.n_units[0], activation=square_activation)(x)
+        x = bnn.SquareDense(features=self.n_units[1], activation=square_activation)(x)
+        x = bnn.SquareDense(features=1, activation=None)(x)
+        return jnp.log(x)
 
-    def __init__(self, n_units):
-        super(twolayers, self).__init__()
-        self.bihomogeneous = bnn.Bihomogeneous()
-        self.layer1 = bnn.SquareDense(25, n_units[0], activation=tf.square)
-        self.layer2 = bnn.SquareDense(n_units[0], n_units[1], activation=tf.square)
-        self.layer3 = bnn.SquareDense(n_units[1], 1)
+class threelayers(nn.Module):
+    n_units: Sequence[int]
 
-    def call(self, inputs):
-        x = self.bihomogeneous(inputs)
-        x = self.layer1(x)
-        x = self.layer2(x)
-        x = self.layer3(x)
-        x = tf.math.log(x)
-        return x
+    @nn.compact
+    def __call__(self, inputs):
+        x = bnn.Bihomogeneous()(inputs)
+        x = bnn.SquareDense(features=self.n_units[0], activation=square_activation)(x)
+        x = bnn.SquareDense(features=self.n_units[1], activation=square_activation)(x)
+        x = bnn.SquareDense(features=self.n_units[2], activation=square_activation)(x)
+        x = bnn.SquareDense(features=1, activation=None)(x)
+        return jnp.log(x)
 
+class fourlayers(nn.Module):
+    n_units: Sequence[int]
 
-class threelayers(keras.Model):
+    @nn.compact
+    def __call__(self, inputs):
+        x = bnn.Bihomogeneous()(inputs)
+        x = bnn.SquareDense(features=self.n_units[0], activation=square_activation)(x)
+        x = bnn.SquareDense(features=self.n_units[1], activation=square_activation)(x)
+        x = bnn.SquareDense(features=self.n_units[2], activation=square_activation)(x)
+        x = bnn.SquareDense(features=self.n_units[3], activation=square_activation)(x)
+        x = bnn.SquareDense(features=1, activation=None)(x)
+        return jnp.log(x)
 
-    def __init__(self, n_units):
-        super(threelayers, self).__init__()
-        self.bihomogeneous = bnn.Bihomogeneous()
-        self.layer1 = bnn.SquareDense(25, n_units[0], activation=tf.square)
-        self.layer2 = bnn.SquareDense(n_units[0], n_units[1], activation=tf.square)
-        self.layer3 = bnn.SquareDense(n_units[1], n_units[2], activation=tf.square)
-        self.layer4 = bnn.SquareDense(n_units[2], 1)
+class fivelayers(nn.Module):
+    n_units: Sequence[int]
 
-    def call(self, inputs):
-        x = self.bihomogeneous(inputs)
-        x = self.layer1(x)
-        x = self.layer2(x)
-        x = self.layer3(x)
-        x = self.layer4(x)
-        x = tf.math.log(x)
-        return x
+    @nn.compact
+    def __call__(self, inputs):
+        x = bnn.Bihomogeneous()(inputs)
+        x = bnn.SquareDense(features=self.n_units[0], activation=square_activation)(x)
+        x = bnn.SquareDense(features=self.n_units[1], activation=square_activation)(x)
+        x = bnn.SquareDense(features=self.n_units[2], activation=square_activation)(x)
+        x = bnn.SquareDense(features=self.n_units[3], activation=square_activation)(x)
+        x = bnn.SquareDense(features=self.n_units[4], activation=square_activation)(x)
+        x = bnn.SquareDense(features=1, activation=None)(x)
+        return jnp.log(x)
 
+class OuterProductNN_k2(nn.Module):
+    @nn.compact
+    def __call__(self, inputs):
+        x = bnn.Bihomogeneous_k2()(inputs)
+        x = bnn.WidthOneDense(features=1)(x)
+        return jnp.log(x)
 
-class fourlayers(keras.Model):
+class OuterProductNN_k3(nn.Module):
+    @nn.compact
+    def __call__(self, inputs):
+        x = bnn.Bihomogeneous_k3()(inputs)
+        x = bnn.WidthOneDense(features=1)(x)
+        return jnp.log(x)
 
-    def __init__(self, n_units):
-        super(fourlayers, self).__init__()
-        self.bihomogeneous = bnn.Bihomogeneous()
-        self.layer1 = bnn.SquareDense(25, n_units[0], activation=tf.square)
-        self.layer2 = bnn.SquareDense(n_units[0], n_units[1], activation=tf.square)
-        self.layer3 = bnn.SquareDense(n_units[1], n_units[2], activation=tf.square)
-        self.layer4 = bnn.SquareDense(n_units[2], n_units[3], activation=tf.square)
-        self.layer5 = bnn.SquareDense(n_units[3], 1)
+class OuterProductNN_k4(nn.Module):
+    @nn.compact
+    def __call__(self, inputs):
+        x = bnn.Bihomogeneous_k4()(inputs)
+        x = bnn.WidthOneDense(features=1)(x)
+        return jnp.log(x)
 
-    def call(self, inputs):
-        x = self.bihomogeneous(inputs)
-        x = self.layer1(x)
-        x = self.layer2(x)
-        x = self.layer3(x)
-        x = self.layer4(x)
-        x = self.layer5(x)
-        x = tf.math.log(x)
-        return x
+class k2_twolayers(nn.Module):
+    n_units: Sequence[int]
 
+    @nn.compact
+    def __call__(self, inputs):
+        x = bnn.Bihomogeneous_k2()(inputs)
+        x = bnn.SquareDense(features=self.n_units[0], activation=square_activation)(x)
+        x = bnn.SquareDense(features=self.n_units[1], activation=square_activation)(x)
+        x = bnn.SquareDense(features=1, activation=None)(x)
+        return jnp.log(x)
 
-class fivelayers(keras.Model):
+class k2_threelayers(nn.Module):
+    n_units: Sequence[int]
 
-    def __init__(self, n_units):
-        super(fivelayers, self).__init__()
-        self.bihomogeneous = bnn.Bihomogeneous()
-        self.layer1 = bnn.SquareDense(25, n_units[0], activation=tf.square)
-        self.layer2 = bnn.SquareDense(n_units[0], n_units[1], activation=tf.square)
-        self.layer3 = bnn.SquareDense(n_units[1], n_units[2], activation=tf.square)
-        self.layer4 = bnn.SquareDense(n_units[2], n_units[3], activation=tf.square)
-        self.layer5 = bnn.SquareDense(n_units[3], n_units[4], activation=tf.square)
-        self.layer6 = bnn.SquareDense(n_units[4], 1)
+    @nn.compact
+    def __call__(self, inputs):
+        x = bnn.Bihomogeneous_k2()(inputs)
+        x = bnn.SquareDense(features=self.n_units[0], activation=square_activation)(x)
+        x = bnn.SquareDense(features=self.n_units[1], activation=square_activation)(x)
+        x = bnn.SquareDense(features=self.n_units[2], activation=square_activation)(x)
+        x = bnn.SquareDense(features=1, activation=None)(x)
+        return jnp.log(x)
 
-    def call(self, inputs):
-        x = self.bihomogeneous(inputs)
-        x = self.layer1(x)
-        x = self.layer2(x)
-        x = self.layer3(x)
-        x = self.layer4(x)
-        x = self.layer5(x)
-        x = self.layer6(x)
-        x = tf.math.log(x)
-        return x
+class k4_onelayer(nn.Module):
+    n_units: Sequence[int]
 
-class OuterProductNN_k2(keras.Model):
-   
-    def __init__(self):
-        super(OuterProductNN_k2, self).__init__()
-        self.bihomogeneous_k2 = bnn.Bihomogeneous_k2()
-        self.layer1 = bnn.WidthOneDense(15**2, 1)
+    @nn.compact
+    def __call__(self, inputs):
+        x = bnn.Bihomogeneous_k4()(inputs)
+        x = bnn.SquareDense(features=self.n_units[0], activation=square_activation)(x)
+        x = bnn.SquareDense(features=1, activation=None)(x)
+        return jnp.log(x)
 
-    def call(self, inputs):
-        x = self.bihomogeneous_k2(inputs)
-        x = self.layer1(x)
-        x = tf.math.log(x)
-        return x
+class k4_twolayers(nn.Module):
+    n_units: Sequence[int]
 
-
-class OuterProductNN_k3(keras.Model):
-   
-    def __init__(self):
-        super(OuterProductNN_k3, self).__init__()
-        self.bihomogeneous_k3 = bnn.Bihomogeneous_k3()
-        self.layer1 = bnn.WidthOneDense(35**2, 1)
-
-    def call(self, inputs):
-        x = self.bihomogeneous_k3(inputs)
-        x = self.layer1(x)
-        x = tf.math.log(x)
-        return x
-
-class OuterProductNN_k4(keras.Model):
-   
-    def __init__(self):
-        super(OuterProductNN_k4, self).__init__()
-        self.bihomogeneous_k4 = bnn.Bihomogeneous_k4()
-        self.layer1 = bnn.WidthOneDense(70**2, 1)
-
-    def call(self, inputs):
-        with tf.device('/cpu:0'):
-            x = self.bihomogeneous_k4(inputs)
-        with tf.device('/gpu:0'):
-            x = self.layer1(x)
-            x = tf.math.log(x)
-        return x
-
-class k2_twolayers(keras.Model):
-
-    def __init__(self, n_units):
-        super(k2_twolayers, self).__init__()
-        self.bihomogeneous_k2 = bnn.Bihomogeneous_k2()
-        self.layer1 = bnn.SquareDense(15**2, n_units[0], activation=tf.square)
-        self.layer2 = bnn.SquareDense(n_units[0], n_units[1], activation=tf.square)
-        self.layer3 = bnn.SquareDense(n_units[1], 1)
-
-    def call(self, inputs):
-        x = self.bihomogeneous_k2(inputs)
-        x = self.layer1(x)
-        x = self.layer2(x)
-        x = self.layer3(x)
-        x = tf.math.log(x)
-        return x
-
-
-class k2_threelayers(keras.Model):
-
-    def __init__(self, n_units):
-        super(k2_threelayers, self).__init__()
-        self.bihomogeneous_k2 = bnn.Bihomogeneous_k2()
-        self.layer1 = bnn.SquareDense(15**2, n_units[0], activation=tf.square)
-        self.layer2 = bnn.SquareDense(n_units[0], n_units[1], activation=tf.square)
-        self.layer3 = bnn.SquareDense(n_units[1], n_units[2], activation=tf.square)
-        self.layer4 = bnn.SquareDense(n_units[2], 1)
-
-    def call(self, inputs):
-        x = self.bihomogeneous_k2(inputs)
-        x = self.layer1(x)
-        x = self.layer2(x)
-        x = self.layer3(x)
-        x = self.layer4(x)
-        x = tf.math.log(x)
-        return x
-
-class k4_onelayer(keras.Model):
-
-    def __init__(self, n_units):
-        super(k4_onelayer, self).__init__()
-        self.bihomogeneous_k4 = bnn.Bihomogeneous_k4()
-        self.layer1 = bnn.SquareDense(70**2, n_units[0], activation=tf.square)
-        self.layer2 = bnn.SquareDense(n_units[0], 1)
-
-    def call(self, inputs):
-        x = self.bihomogeneous_k4(inputs)
-        x = self.layer1(x)
-        x = self.layer2(x)
-        x = tf.math.log(x)
-        return x
-
-class k4_twolayers(keras.Model):
-
-    def __init__(self, n_units):
-        super(k4_twolayers, self).__init__()
-        self.bihomogeneous_k4 = bnn.Bihomogeneous_k4()
-        self.layer1 = bnn.SquareDense(70**2, n_units[0], activation=tf.square)
-        self.layer2 = bnn.SquareDense(n_units[0], n_units[1], activation=tf.square)
-        self.layer3 = bnn.SquareDense(n_units[1], 1)
-
-    def call(self, inputs):
-        x = self.bihomogeneous_k4(inputs)
-        x = self.layer1(x)
-        x = self.layer2(x)
-        x = self.layer3(x)
-        x = tf.math.log(x)
-        return x
-
+    @nn.compact
+    def __call__(self, inputs):
+        x = bnn.Bihomogeneous_k4()(inputs)
+        x = bnn.SquareDense(features=self.n_units[0], activation=square_activation)(x)
+        x = bnn.SquareDense(features=self.n_units[1], activation=square_activation)(x)
+        x = bnn.SquareDense(features=1, activation=None)(x)
+        return jnp.log(x)
