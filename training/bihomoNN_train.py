@@ -175,7 +175,9 @@ def main():
     # Helper to calculate metrics on a dataset
     def calculate_metrics(current_params: Any, dataset: Dict[str, np.ndarray], metric_fn: Callable) -> jnp.ndarray:
         """Calculates a specified metric over a dataset."""
-        temp_loss_fn = mlg_lbfgs.create_loss_fn(model, dataset, metric_fn)
+        # Use batched evaluation for memory efficiency (Global Normalization)
+        eval_batch_size = 2048
+        temp_loss_fn = mlg_lbfgs.create_loss_fn(model, dataset, metric_fn, batch_size=eval_batch_size)
         return temp_loss_fn(current_params)
 
     if args.optimizer.lower() == 'lbfgs':
