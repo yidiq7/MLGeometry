@@ -42,9 +42,13 @@ def MAPE_plus_max_error(y_true: jnp.ndarray, y_pred: jnp.ndarray, mass: jnp.ndar
     return max_error(y_true, y_pred, mass) + weighted_MAPE(y_true, y_pred, mass)
 
 
+def eta_array(y_true: jnp.ndarray, y_pred: jnp.ndarray, mass: jnp.ndarray) -> jnp.ndarray:
+    return y_pred / y_true
+
+
 # --- Core Logic ---
 
-def compute_cy_metric(params: Any, batch: dict, model: Any) -> jnp.ndarray:
+def compute_cy_metric(model: Any, params: Any, batch: dict) -> jnp.ndarray:
     """
     Computes the Calabi-Yau metric tensor g_{i j_bar} for a batch of points.
     
@@ -77,9 +81,9 @@ def compute_cy_metric(params: Any, batch: dict, model: Any) -> jnp.ndarray:
     return metric_restricted
 
 
-def compute_loss(params: Any, 
+def compute_loss(model: Any,
+                 params: Any, 
                  batch: dict, 
-                 model: Any, 
                  loss_metric: Callable[[jnp.ndarray, jnp.ndarray, jnp.ndarray], jnp.ndarray]) -> jnp.ndarray:
     """
     Computes the loss for a given batch of data (Local Normalization).
@@ -88,7 +92,7 @@ def compute_loss(params: Any,
     mass = batch['mass']
     
     # Reuse the metric computation logic
-    metric_restricted = compute_cy_metric(params, batch, model)
+    metric_restricted = compute_cy_metric(model, params, batch)
     
     # Compute determinant (Volume Form)
     det_vol = jnp.real(jax.vmap(jnp.linalg.det)(metric_restricted))
@@ -105,7 +109,7 @@ def _compute_unnormalized_volumes(params, batch, model):
     """
     Computes unnormalized volume determinants. Helper for accumulated gradients.
     """
-    metric_restricted = compute_cy_metric(params, batch, model)
+    metric_restricted = compute_cy_metric(model, params, batch)
     return jnp.real(jax.vmap(jnp.linalg.det)(metric_restricted))
 
 
@@ -121,12 +125,8 @@ def make_full_dataset_loss_fn(model: Any,
     
     if batch_size is None:
         # --- Full Batch Mode ---
-        dataset_jax = {k: jnp.array(v) for k, v in dataset.items()}
-        dataset_jax['points'] = dataset_jax['points'].astype(jnp.complex64)
-        dataset_jax['restriction'] = dataset_jax['restriction'].astype(jnp.complex64)
-        
         def loss_fn(params):
-            return compute_loss(params, dataset_jax, model, loss_metric)
+            return compute_loss(model, params, dataset, loss_metric)
         return loss_fn
 
     else:
@@ -172,3 +172,10 @@ def make_full_dataset_loss_fn(model: Any,
             return loss_metric(omega_flat, all_vols / factor, mass_flat)
 
         return loss_fn_accumulated
+
+def evaluate_dataset(model: Any, current_params: Any, dataset: dict, metric_func: Callable, batch_size: Optional[int] = None) -> jnp.ndarray:
+    loss_fn_wrapped = make_full_dataset_loss_fn(model, dataset, metric_func, batch_size=batch_size)
+
+    # JIT the returned function
+    #jitted_loss_fn = jax.jit(loss_fn_wrapped)
+    return loss_fn_wrapped(current_params)

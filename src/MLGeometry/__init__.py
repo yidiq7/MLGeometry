@@ -8,6 +8,7 @@ from . import bihomoNN
 from . import loss
 from . import dataset
 from . import complex_math
+from . import trainer
 
 __all__ = [
     'hypersurface',
@@ -15,5 +16,6 @@ __all__ = [
     'bihomoNN',
     'loss',
     'dataset',
-    'complex_math'
+    'complex_math',
+    'trainer'
 ]

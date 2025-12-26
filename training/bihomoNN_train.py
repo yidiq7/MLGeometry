@@ -1,9 +1,3 @@
-"Training script for bihomogeneous neural networks to find Calabi-Yau metrics.
-
-This script handles argument parsing, hypersurface generation, model definition,
-and training using either Adam (Optax) or L-BFGS (JAXopt).
-"
-
 import os
 import sys
 import argparse
@@ -12,22 +6,16 @@ import math
 import pickle
 from typing import Dict, Any, Callable, Sequence, Tuple
 
-import jax
-import jax.numpy as jnp
-import optax
 import numpy as np
 import sympy as sp
-from flax import linen as nn # Imported for nn.Module in model selection
-
-# Adjust path to import MLGeometry package
-# Assumes script is run from 'training' directory
-sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+import jax
+import jax.numpy as jnp
+from flax import linen as nn
+import optax
+import jaxopt
 
 import MLGeometry as mlg
-from MLGeometry import loss as mlg_loss
-from MLGeometry import lbfgs as mlg_lbfgs
-from MLGeometry import dataset as mlg_dataset
-from MLGeometry import hypersurface as mlg_hypersurface
+from MLGeometry import bihomoNN as bnn
 # Import model architectures from local models.py
 from models import (
     zerolayer, onelayer, twolayers, threelayers, fourlayers, fivelayers,
@@ -83,10 +71,10 @@ def main():
 
     # --- Define Hypersurface ---
     z0, z1, z2, z3, z4 = sp.symbols('z0, z1, z2, z3, z4')
-    Z: Sequence[sp.Symbol] = [z0, z1, z2, z3, z4]
+    Z = [z0, z1, z2, z3, z4]
 
     # Construct function 'f' based on arguments
-    f: sp.Expr = z0**5 + z1**5 + z2**5 + z3**5 + z4**5 + args.psi * z0 * z1 * z2 * z3 * z4
+    f = z0**5 + z1**5 + z2**5 + z3**5 + z4**5 + args.psi * z0 * z1 * z2 * z3 * z4
     if args.function == 'f1':
         f += args.phi * (z3 * z4**4 + z3**2 * z4**3 + z3**3 * z4**2 + z3**4 * z4)
     elif args.function == 'f2':
@@ -95,26 +83,22 @@ def main():
                            z0 * z2 * z4 * z1**2 + z1**2 * z3**3 + z1 * z4**4 + z1 * z2 * z0**3 + z2**2 * z4**3 + z4 * z2**4 + z1 * z3**4)
 
     print("\n--- Generating Hypersurface Points ---")
-    HS_train: mlg_hypersurface.Hypersurface = mlg_hypersurface.Hypersurface(Z, f, args.n_pairs)
-    HS_test: mlg_hypersurface.Hypersurface = mlg_hypersurface.Hypersurface(Z, f, args.n_pairs)
+    HS_train = mlg.hypersurface.Hypersurface(Z, f, args.n_pairs)
+    HS_test = mlg.hypersurface.Hypersurface(Z, f, args.n_pairs)
     print(f"Generated {HS_train.n_points} training points.")
     print(f"Generated {HS_test.n_points} test points.")
 
     # --- Generate Datasets ---
     print("\n--- Generating Datasets for Training/Testing ---")
-    train_data: Dict[str, np.ndarray] = mlg_dataset.generate_dataset(HS_train)
-    test_data: Dict[str, np.ndarray] = mlg_dataset.generate_dataset(HS_test)
-    print(f"Train dataset: points shape {train_data['points'].shape}")
-    print(f"Test dataset: points shape {test_data['points'].shape}")
+    train_set = mlg.dataset.generate_dataset(HS_train)
+    test_set = mlg.dataset.generate_dataset(HS_test)
 
     # --- Network Model Selection ---
     print("\n--- Selecting Network Architecture ---")
-    n_units: Sequence[int] = []
+    n_units = []
     if args.layers:
         n_units = [int(u) for u in args.layers.split('_')]
-    n_hidden: int = len(n_units) - 1 if n_units else -1 # -1 if zero layer, 0 if one layer
-
-    model_cls: Callable[..., nn.Module]
+    n_hidden = len(n_units) - 1 if n_units else -1 # -1 if zero layer, 0 if one layer
 
     if args.OuterProductNN_k is not None:
         model_list_OuterProductNN = {2: OuterProductNN_k2, 3: OuterProductNN_k3, 4: OuterProductNN_k4}
@@ -142,28 +126,28 @@ def main():
         model = model_cls(n_units)
 
     # Initialize model parameters
-    dummy_input: jnp.ndarray = jnp.ones((1, len(Z)), dtype=jnp.complex64)
-    rng, init_rng = jax.random.split(rng)
-    params: Any = model.init(init_rng, dummy_input)
+    dummy_input = jnp.ones((1, len(Z)), dtype=jnp.complex64)
+    rng = jax.random.split(rng)
+    params = model.init(init_rng, dummy_input)
     print(f"Model initialized with {sum(x.size for x in jax.tree_util.tree_leaves(params))} parameters.")
 
     # Load pre-trained parameters if specified
-    if args.load_model:
+    if arg.load_model:
         if os.path.exists(args.load_model):
             print(f"Loading model parameters from {args.load_model}")
-            with open(args.load_model, 'rb') as f:
-                params = pickle.load(f)
+            with open(args.load_model, 'rb') as pkl:
+                params = pickle.load(pkl)
         else:
             print(f"Warning: Model file not found at {args.load_model}. Starting with random initialization.")
 
     # --- Loss Function Setup ---
-    loss_func_map: Dict[str, Callable] = {
+    loss_func_map = {
         "weighted_MAPE": mlg_loss.weighted_MAPE,
         "weighted_MSE": mlg_loss.weighted_MSE,
         "max_error": mlg_loss.max_error,
         "MAPE_plus_max_error": mlg_loss.MAPE_plus_max_error
     }
-    loss_metric: Callable = loss_func_map[args.loss_func]
+    loss_metric = loss_func_map[args.loss_func]
 
     # Create output directory
     os.makedirs(args.save_dir, exist_ok=True)
@@ -172,24 +156,19 @@ def main():
     print("\n--- Starting Training ---")
     train_start_time = time.time()
 
-    # Helper to calculate metrics on a dataset
-    def calculate_metrics(current_params: Any, dataset: Dict[str, np.ndarray], metric_fn: Callable) -> jnp.ndarray:
-        """Calculates a specified metric over a dataset."""
-        # Use batched evaluation for memory efficiency (Global Normalization)
-        eval_batch_size = 2048
-        temp_loss_fn = mlg_loss.make_full_dataset_loss_fn(model, dataset, metric_fn, batch_size=eval_batch_size)
-        
-        # JIT the returned function for performance
-        jitted_eval_fn = jax.jit(temp_loss_fn)
-        
-        return jitted_eval_fn(current_params)
 
     if args.optimizer.lower() == 'lbfgs':
-        # L-BFGS always uses the full batch
-        print(f"Using L-BFGS optimizer for {args.max_epochs} iterations.")
-        full_batch_loss_fn = mlg_loss.make_full_dataset_loss_fn(model, train_data, loss_metric)
-        lbfgs_solver = mlg_lbfgs.LBFGS(full_batch_loss_fn, max_iter=args.max_epochs, tol=1e-7)
-        params, _ = lbfgs_solver.run(params)
+        # L-BFGS always uses the full batch (or accumulated gradients equivalent)
+        # Using batch_size allows for gradient accumulation if dataset is large
+        lbfgs_batch_size = 2048
+        print(f"Using L-BFGS optimizer for {args.max_epochs} iterations (Batch Size: {lbfgs_batch_size}).")
+        
+        full_batch_loss_fn = mlg_loss.make_full_dataset_loss_fn(model, train_set, loss_metric, batch_size=lbfgs_batch_size)
+        
+        lbfgs_solver = jaxopt.LBFGS(fun=full_batch_loss_fn, maxiter=args.max_epochs, tol=1e-7)
+        res = lbfgs_solver.run(params)
+        params = res.params
+        
         final_loss = full_batch_loss_fn(params)
         print(f"Final L-BFGS loss: {final_loss:.5f}")
 
@@ -219,17 +198,18 @@ def main():
         # --- Mini-batching setup (if batch_size is specified) ---
         if args.batch_size is not None:
             print(f"Using mini-batch training with batch size: {args.batch_size}")
-            # Convert numpy arrays in dataset to jax arrays and store as PyTree
-            # This allows jax.random.permutation and subsequent splitting.
-            num_train_points = train_data['points'].shape[0]
+            # Dataset is already JAX arrays
+            num_train_points = train_set['points'].shape[0]
             num_batches = (num_train_points + args.batch_size - 1) // args.batch_size
 
             @jax.jit
             def minibatch_step(current_params: Any, current_opt_state: optax.OptState, batch: Dict[str, jnp.ndarray]) -> Tuple[Any, optax.OptState, jnp.ndarray]:
                 """Performs a single mini-batch optimization step."""
-                # Create loss_fn for this batch
-                batch_loss_fn = mlg_loss.make_full_dataset_loss_fn(model, batch, loss_metric)
-                loss_val, grads = jax.value_and_grad(batch_loss_fn)(current_params)
+                # Use compute_loss for local batch loss
+                loss_val, grads = jax.value_and_grad(
+                    lambda p: mlg_loss.compute_loss(model, p, batch, loss_metric)
+                )(current_params)
+                
                 updates, new_opt_state = optimizer.update(grads, current_opt_state, current_params)
                 new_params = optax.apply_updates(current_params, updates)
                 return new_params, new_opt_state, loss_val
@@ -237,16 +217,21 @@ def main():
             for epoch in range(args.max_epochs):
                 rng, perm_rng = jax.random.split(rng)
                 permutation = jax.random.permutation(perm_rng, num_train_points)
-                shuffled_data = jax.tree_util.tree_map(lambda x: x[permutation], train_data)
+                shuffled_data = jax.tree_util.tree_map(lambda x: x[permutation], train_set)
 
                 epoch_loss = 0.0
                 for i in range(num_batches):
                     batch_start = i * args.batch_size
                     batch_end = min((i + 1) * args.batch_size, num_train_points)
+                    
+                    # Create batch slice (dynamic slicing)
+                    # Note: For max speed with JIT, fixed batch size is preferred, 
+                    # but dynamic slicing works with some recompilation overhead if size changes (last batch).
+                    # Using `lax.dynamic_slice` logic implicitly via numpy slicing style on JAX arrays.
                     batch = jax.tree_util.tree_map(lambda x: x[batch_start:batch_end], shuffled_data)
                     
                     params, opt_state, batch_loss_val = minibatch_step(params, opt_state, batch)
-                    epoch_loss += batch_loss_val.item() # .item() to get scalar from JAX array
+                    epoch_loss += batch_loss_val.item()
                 
                 avg_epoch_loss = epoch_loss / num_batches
                 if epoch % 10 == 0:
@@ -254,7 +239,12 @@ def main():
 
         else: # Full batch training for Adam/SGD
             print("Using full-batch training.")
-            full_batch_loss_fn = mlg_loss.make_full_dataset_loss_fn(model, train_data, loss_metric)
+            # Use compute_loss directly for full batch
+            # Or use make_full_dataset_loss_fn? 
+            # compute_loss uses local normalization (on the batch provided).
+            # If batch is full dataset, local normalization == global normalization.
+            
+            full_batch_loss_fn = mlg_loss.make_full_dataset_loss_fn(model, train_set, loss_metric)
 
             @jax.jit
             def full_batch_step(current_params: Any, current_opt_state: optax.OptState) -> Tuple[Any, optax.OptState, jnp.ndarray]:
@@ -274,28 +264,28 @@ def main():
 
     # --- Save Trained Model Parameters ---
     model_save_path = os.path.join(args.save_dir, args.save_name + '.pkl')
-    with open(model_save_path, 'wb') as f:
-        pickle.dump(params, f)
+    with open(model_save_path, 'wb') as pkl:
+        pickle.dump(params, pkl)
     print(f"Trained model parameters saved to {model_save_path}")
 
     # --- Final Evaluation ---
     print("\n--- Final Evaluation ---")
-    sigma_train = calculate_metrics(params, train_data, mlg_loss.weighted_MAPE)
-    sigma_test = calculate_metrics(params, test_data, mlg_loss.weighted_MAPE)
-    E_train = calculate_metrics(params, train_data, mlg_loss.weighted_MSE)
-    E_test = calculate_metrics(params, test_data, mlg_loss.weighted_MSE)
-    sigma_max_train = calculate_metrics(params, train_data, mlg_loss.max_error)
-    sigma_max_test = calculate_metrics(params, test_data, mlg_loss.max_error)
+    sigma_train = evaluate_dataset(model, params, train_set, mlg_loss.weighted_MAPE, args.batch_size)
+    sigma_test = evaluate_dataset(model, params, test_set, mlg_loss.weighted_MAPE, args.batch_size)
+    E_train = evaluate_dataset(model, params, train_set, mlg_loss.weighted_MSE, args.batch_size)
+    E_test = evaluate_dataset(model, params, test_set, mlg_loss.weighted_MSE, args.batch_size)
+    sigma_max_train = evaluate_dataset(model, params, train_set, mlg_loss.max_error, args.batch_size)
+    sigma_max_test = evaluate_dataset(model, params, test_set, mlg_loss.max_error, args.batch_size)
 
-    # Delta Sigma calculation (error in Monte Carlo integration)
+    # Delta Sigma calculation
     def delta_sigma_square_metric_maker(sigma_val: jnp.ndarray) -> Callable[[jnp.ndarray, jnp.ndarray, jnp.ndarray], jnp.ndarray]:
         def metric_func(y_true: jnp.ndarray, y_pred: jnp.ndarray, mass: jnp.ndarray) -> jnp.ndarray:
             weights = mass / jnp.sum(mass)
             return jnp.sum((jnp.abs(y_true - y_pred) / y_true - sigma_val)**2 * weights)
         return metric_func
 
-    delta_sigma_train_sq = calculate_metrics(params, train_data, delta_sigma_square_metric_maker(sigma_train))
-    delta_sigma_test_sq = calculate_metrics(params, test_data, delta_sigma_square_metric_maker(sigma_test))
+    delta_sigma_train_sq = evaluate_dataset(model, params, train_set, delta_sigma_square_metric_maker(sigma_train), args.batch_size)
+    delta_sigma_test_sq = evaluate_dataset(model, params, test_set, delta_sigma_square_metric_maker(sigma_test), args.batch_size)
     delta_sigma_train = math.sqrt(delta_sigma_train_sq.item() / HS_train.n_points)
     delta_sigma_test = math.sqrt(delta_sigma_test_sq.item() / HS_test.n_points)
 
@@ -306,8 +296,8 @@ def main():
             return jnp.sum(((y_pred / y_true - 1)**2 - E_val)**2 * weights)
         return metric_func
     
-    delta_E_train_sq = calculate_metrics(params, train_data, delta_E_square_metric_maker(E_train))
-    delta_E_test_sq = calculate_metrics(params, test_data, delta_E_square_metric_maker(E_test))
+    delta_E_train_sq = evaluate_dataset(params, train_set, delta_E_square_metric_maker(E_train), args.batch_size)
+    delta_E_test_sq = evaluate_dataset(params, test_set, delta_E_square_metric_maker(E_test), args.batch_size)
     delta_E_train = math.sqrt(delta_E_train_sq.item() / HS_train.n_points)
     delta_E_test = math.sqrt(delta_E_test_sq.item() / HS_test.n_points)
 
@@ -332,8 +322,6 @@ def main():
             f.write(f'phi = {args.phi} \n')
         elif args.function == 'f2':
             f.write(f'alpha = {args.alpha} \n') 
-        # k parameter is dynamic, not easily available here
-        # f.write('k = {} \n'.format(k)) 
         f.write(f'n_parameters = {sum(x.size for x in jax.tree_util.tree_leaves(params))} \n') 
         f.write(f'loss function = {loss_metric.__name__} \n')
         if args.clip_threshold is not None:
