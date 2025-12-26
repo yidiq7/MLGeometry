@@ -125,12 +125,6 @@ def main():
             raise ValueError(f"General layers supports n_hidden from 0 to 5. Got {n_hidden}")
         model = model_cls(n_units)
 
-    # Initialize model parameters
-    dummy_input = jnp.ones((1, len(Z)), dtype=jnp.complex64)
-    rng = jax.random.split(rng)
-    params = model.init(init_rng, dummy_input)
-    print(f"Model initialized with {sum(x.size for x in jax.tree_util.tree_leaves(params))} parameters.")
-
     # Load pre-trained parameters if specified
     if arg.load_model:
         if os.path.exists(args.load_model):
