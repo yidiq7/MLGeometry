@@ -4,7 +4,6 @@ import argparse
 import time
 import math
 import pickle
-from typing import Dict, Any, Callable, Sequence, Tuple
 
 import numpy as np
 import sympy as sp
@@ -126,7 +125,8 @@ def main():
         model = model_cls(n_units)
 
     # Load pre-trained parameters if specified
-    if arg.load_model:
+    params = None
+    if args.load_model:
         if os.path.exists(args.load_model):
             print(f"Loading model parameters from {args.load_model}")
             with open(args.load_model, 'rb') as pkl:
@@ -136,10 +136,10 @@ def main():
 
     # --- Loss Function Setup ---
     loss_func_map = {
-        "weighted_MAPE": mlg_loss.weighted_MAPE,
-        "weighted_MSE": mlg_loss.weighted_MSE,
-        "max_error": mlg_loss.max_error,
-        "MAPE_plus_max_error": mlg_loss.MAPE_plus_max_error
+        "weighted_MAPE": mlg.loss.weighted_MAPE,
+        "weighted_MSE": mlg.loss.weighted_MSE,
+        "max_error": mlg.loss.max_error,
+        "MAPE_plus_max_error": mlg.loss.MAPE_plus_max_error
     }
     loss_metric = loss_func_map[args.loss_func]
 
@@ -149,109 +149,51 @@ def main():
     # --- Training ---
     print("\n--- Starting Training ---")
     train_start_time = time.time()
-
+    training_history = []
 
     if args.optimizer.lower() == 'lbfgs':
-        # L-BFGS always uses the full batch (or accumulated gradients equivalent)
-        # Using batch_size allows for gradient accumulation if dataset is large
-        lbfgs_batch_size = 2048
-        print(f"Using L-BFGS optimizer for {args.max_epochs} iterations (Batch Size: {lbfgs_batch_size}).")
+        params, final_loss = mlg.trainer.train_lbfgs(
+            model=model,
+            dataset=train_set,
+            max_iter=args.max_epochs,
+            loss_metric=loss_metric,
+            params=params,
+            batch_size=args.batch_size or 2048,
+            verbose=True,
+            history=training_history
+        )
+    else:
+        train_batch_size = args.batch_size if args.batch_size is not None else train_set['points'].shape[0]
+        steps_per_epoch = int(np.ceil(train_set['points'].shape[0] / train_batch_size))
         
-        full_batch_loss_fn = mlg_loss.make_full_dataset_loss_fn(model, train_set, loss_metric, batch_size=lbfgs_batch_size)
-        
-        lbfgs_solver = jaxopt.LBFGS(fun=full_batch_loss_fn, maxiter=args.max_epochs, tol=1e-7)
-        res = lbfgs_solver.run(params)
-        params = res.params
-        
-        final_loss = full_batch_loss_fn(params)
-        print(f"Final L-BFGS loss: {final_loss:.5f}")
-
-    else: # Adam or SGD
-        print(f"Using {args.optimizer} optimizer for {args.max_epochs} epochs.")
-        
-        # Setup optimizer with learning rate schedule
         schedule = optax.exponential_decay(
             init_value=args.learning_rate,
-            transition_steps=HS_train.n_points if args.batch_size is None else int(HS_train.n_points / args.batch_size), 
+            transition_steps=steps_per_epoch, 
             decay_rate=args.decay_rate
         )
+        
         if args.optimizer.lower() == 'sgd':
             optimizer = optax.sgd(schedule)
         else: # Adam
             optimizer = optax.adam(schedule)
         
-        # Optionally add gradient clipping
         if args.clip_threshold is not None:
             optimizer = optax.chain(
                 optax.clip_by_global_norm(args.clip_threshold),
                 optimizer
             )
-
-        opt_state = optimizer.init(params)
-        
-        # --- Mini-batching setup (if batch_size is specified) ---
-        if args.batch_size is not None:
-            print(f"Using mini-batch training with batch size: {args.batch_size}")
-            # Dataset is already JAX arrays
-            num_train_points = train_set['points'].shape[0]
-            num_batches = (num_train_points + args.batch_size - 1) // args.batch_size
-
-            @jax.jit
-            def minibatch_step(current_params: Any, current_opt_state: optax.OptState, batch: Dict[str, jnp.ndarray]) -> Tuple[Any, optax.OptState, jnp.ndarray]:
-                """Performs a single mini-batch optimization step."""
-                # Use compute_loss for local batch loss
-                loss_val, grads = jax.value_and_grad(
-                    lambda p: mlg_loss.compute_loss(model, p, batch, loss_metric)
-                )(current_params)
-                
-                updates, new_opt_state = optimizer.update(grads, current_opt_state, current_params)
-                new_params = optax.apply_updates(current_params, updates)
-                return new_params, new_opt_state, loss_val
-
-            for epoch in range(args.max_epochs):
-                rng, perm_rng = jax.random.split(rng)
-                permutation = jax.random.permutation(perm_rng, num_train_points)
-                shuffled_data = jax.tree_util.tree_map(lambda x: x[permutation], train_set)
-
-                epoch_loss = 0.0
-                for i in range(num_batches):
-                    batch_start = i * args.batch_size
-                    batch_end = min((i + 1) * args.batch_size, num_train_points)
-                    
-                    # Create batch slice (dynamic slicing)
-                    # Note: For max speed with JIT, fixed batch size is preferred, 
-                    # but dynamic slicing works with some recompilation overhead if size changes (last batch).
-                    # Using `lax.dynamic_slice` logic implicitly via numpy slicing style on JAX arrays.
-                    batch = jax.tree_util.tree_map(lambda x: x[batch_start:batch_end], shuffled_data)
-                    
-                    params, opt_state, batch_loss_val = minibatch_step(params, opt_state, batch)
-                    epoch_loss += batch_loss_val.item()
-                
-                avg_epoch_loss = epoch_loss / num_batches
-                if epoch % 10 == 0:
-                    print(f"Epoch {epoch}: Average Loss = {avg_epoch_loss:.5f}")
-
-        else: # Full batch training for Adam/SGD
-            print("Using full-batch training.")
-            # Use compute_loss directly for full batch
-            # Or use make_full_dataset_loss_fn? 
-            # compute_loss uses local normalization (on the batch provided).
-            # If batch is full dataset, local normalization == global normalization.
             
-            full_batch_loss_fn = mlg_loss.make_full_dataset_loss_fn(model, train_set, loss_metric)
-
-            @jax.jit
-            def full_batch_step(current_params: Any, current_opt_state: optax.OptState) -> Tuple[Any, optax.OptState, jnp.ndarray]:
-                """Performs a single full-batch optimization step."""
-                loss_val, grads = jax.value_and_grad(full_batch_loss_fn)(current_params)
-                updates, new_opt_state = optimizer.update(grads, current_opt_state, current_params)
-                new_params = optax.apply_updates(current_params, updates)
-                return new_params, new_opt_state, loss_val
-
-            for epoch in range(args.max_epochs):
-                params, opt_state, loss_val = full_batch_step(params, opt_state)
-                if epoch % 10 == 0:
-                    print(f"Epoch {epoch}: Loss = {loss_val:.5f}")
+        params, final_loss = mlg.trainer.train_optax(
+            model=model,
+            dataset=train_set,
+            optimizer=optimizer,
+            epochs=args.max_epochs,
+            batch_size=train_batch_size,
+            loss_metric=loss_metric,
+            params=params,
+            verbose=True,
+            history=training_history
+        )
 
     train_time = time.time() - train_start_time
     print(f"\nTraining finished in {train_time:.2f} seconds.")
@@ -264,34 +206,34 @@ def main():
 
     # --- Final Evaluation ---
     print("\n--- Final Evaluation ---")
-    sigma_train = evaluate_dataset(model, params, train_set, mlg_loss.weighted_MAPE, args.batch_size)
-    sigma_test = evaluate_dataset(model, params, test_set, mlg_loss.weighted_MAPE, args.batch_size)
-    E_train = evaluate_dataset(model, params, train_set, mlg_loss.weighted_MSE, args.batch_size)
-    E_test = evaluate_dataset(model, params, test_set, mlg_loss.weighted_MSE, args.batch_size)
-    sigma_max_train = evaluate_dataset(model, params, train_set, mlg_loss.max_error, args.batch_size)
-    sigma_max_test = evaluate_dataset(model, params, test_set, mlg_loss.max_error, args.batch_size)
+    sigma_train = mlg.loss.evaluate_dataset(model, params, train_set, mlg.loss.weighted_MAPE, args.batch_size)
+    sigma_test = mlg.loss.evaluate_dataset(model, params, test_set, mlg.loss.weighted_MAPE, args.batch_size)
+    E_train = mlg.loss.evaluate_dataset(model, params, train_set, mlg.loss.weighted_MSE, args.batch_size)
+    E_test = mlg.loss.evaluate_dataset(model, params, test_set, mlg.loss.weighted_MSE, args.batch_size)
+    sigma_max_train = mlg.loss.evaluate_dataset(model, params, train_set, mlg.loss.max_error, args.batch_size)
+    sigma_max_test = mlg.loss.evaluate_dataset(model, params, test_set, mlg.loss.max_error, args.batch_size)
 
     # Delta Sigma calculation
-    def delta_sigma_square_metric_maker(sigma_val: jnp.ndarray) -> Callable[[jnp.ndarray, jnp.ndarray, jnp.ndarray], jnp.ndarray]:
+    def delta_sigma_square_metric_maker(sigma_val: jnp.ndarray):
         def metric_func(y_true: jnp.ndarray, y_pred: jnp.ndarray, mass: jnp.ndarray) -> jnp.ndarray:
             weights = mass / jnp.sum(mass)
             return jnp.sum((jnp.abs(y_true - y_pred) / y_true - sigma_val)**2 * weights)
         return metric_func
 
-    delta_sigma_train_sq = evaluate_dataset(model, params, train_set, delta_sigma_square_metric_maker(sigma_train), args.batch_size)
-    delta_sigma_test_sq = evaluate_dataset(model, params, test_set, delta_sigma_square_metric_maker(sigma_test), args.batch_size)
+    delta_sigma_train_sq = mlg.loss.evaluate_dataset(model, params, train_set, delta_sigma_square_metric_maker(sigma_train), args.batch_size)
+    delta_sigma_test_sq = mlg.loss.evaluate_dataset(model, params, test_set, delta_sigma_square_metric_maker(sigma_test), args.batch_size)
     delta_sigma_train = math.sqrt(delta_sigma_train_sq.item() / HS_train.n_points)
     delta_sigma_test = math.sqrt(delta_sigma_test_sq.item() / HS_test.n_points)
 
     # Delta E calculation
-    def delta_E_square_metric_maker(E_val: jnp.ndarray) -> Callable[[jnp.ndarray, jnp.ndarray, jnp.ndarray], jnp.ndarray]:
+    def delta_E_square_metric_maker(E_val: jnp.ndarray):
         def metric_func(y_true: jnp.ndarray, y_pred: jnp.ndarray, mass: jnp.ndarray) -> jnp.ndarray:
             weights = mass / jnp.sum(mass)
             return jnp.sum(((y_pred / y_true - 1)**2 - E_val)**2 * weights)
         return metric_func
     
-    delta_E_train_sq = evaluate_dataset(params, train_set, delta_E_square_metric_maker(E_train), args.batch_size)
-    delta_E_test_sq = evaluate_dataset(params, test_set, delta_E_square_metric_maker(E_test), args.batch_size)
+    delta_E_train_sq = mlg.loss.evaluate_dataset(model, params, train_set, delta_E_square_metric_maker(E_train), args.batch_size)
+    delta_E_test_sq = mlg.loss.evaluate_dataset(model, params, test_set, delta_E_square_metric_maker(E_test), args.batch_size)
     delta_E_train = math.sqrt(delta_E_train_sq.item() / HS_train.n_points)
     delta_E_test = math.sqrt(delta_E_test_sq.item() / HS_test.n_points)
 
@@ -318,6 +260,7 @@ def main():
             f.write(f'alpha = {args.alpha} \n') 
         f.write(f'n_parameters = {sum(x.size for x in jax.tree_util.tree_leaves(params))} \n') 
         f.write(f'loss function = {loss_metric.__name__} \n')
+        f.write(f'optimizer = {args.optimizer} \n')
         if args.clip_threshold is not None:
             f.write(f'clip_threshold = {args.clip_threshold} \n')
         f.write('\n')
@@ -325,14 +268,18 @@ def main():
         f.write(f'train_time = {train_time:.6g} \n')
         f.write(f'sigma_train = {sigma_train:.6g} \n')
         f.write(f'sigma_test = {sigma_test:.6g} \n')
-        f.write(f'delta_sigma_train = {delta_sigma:.6g} \n')
-        f.write(f'delta_sigma_test = {delta_sigma:.6g} \n')
+        f.write(f'delta_sigma_train = {delta_sigma_train:.6g} \n')
+        f.write(f'delta_sigma_test = {delta_sigma_test:.6g} \n')
         f.write(f'E_train = {E_train:.6g} \n')
         f.write(f'E_test = {E_test:.6g} \n')
         f.write(f'delta_E_train = {delta_E_train:.6g} \n')
         f.write(f'delta_E_test = {delta_E_test:.6g} \n')
         f.write(f'sigma_max_train = {sigma_max_train:.6g} \n')
         f.write(f'sigma_max_test = {sigma_max_test:.6g} \n')
+        
+        f.write('\n[Training History]\n')
+        for line in training_history:
+            f.write(line + '\n')
     print(f"Results saved to {results_path}")
 
     summary_path = os.path.join(args.save_dir, "summary.txt")
