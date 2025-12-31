@@ -41,9 +41,9 @@ You can install MLGeometry using one of the following methods:
 If you prefer to use an older version of MLGeometry based on Tensorflow 2.12 and Keras 2, you can check out the previous release (v1.1.0) here: [Version 1.1.0 Release](https://github.com/yidiq7/MLGeometry/releases/tag/v1.1.0). Follow the installation instructions provided in that release's documentation. The compatible versions of Python and CUDA can be found [here](https://www.tensorflow.org/install/source#gpu).
 
 
-## [Sample jupyter notebook](https://github.com/yidiq7/MLGeometry/blob/main/Guide.ipynb)
+## [Sample jupyter notebook](https://github.com/yidiq7/MLGeometry/blob/tf/Guide.ipynb)
 
-[![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/yidiq7/MLGeometry/blob/main/Guide.ipynb)
+[![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/yidiq7/MLGeometry/blob/tf/Guide.ipynb)
 
 ## Citation
 
