@@ -8,7 +8,7 @@ More to come.
 
 ## Recent Changes
 
-The backend of MLGeometry has been switched to 'JAX' from 'Tensorflow' due to the flexibility `JAX` provides and the current trend in the ML community. 
+The backend of MLGeometry has been switched to `JAX` from `Tensorflow` due to the flexibility `JAX` provides and the current trend in the ML community. 
 If you prefer the older version, please check the 'Using and Older Version' section below.
 
 ## Installation
