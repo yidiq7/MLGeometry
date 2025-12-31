@@ -10,6 +10,12 @@ We have switched the backend from `Tensorflow` to `JAX` due to flexibility and p
 The API bas also been simplified accordingly. 
 Please check the usage of the updated package in the latest version of `Guide.ipynb` and training script.
 
+## [1.2.2] - 2025-06-26
+
+### Changed
+
+- Fixed the version info in pyproject.toml
+
 ## [1.2.1] - 2025-06-25
 
 ### Changed
@@ -67,4 +73,5 @@ Please check the usage of the updated package in the latest version of `Guide.ip
 [1.1.0]: https://github.com/yidiq7/MLGeometry/releases/tag/v1.1.0
 [1.2.0]: https://github.com/yidiq7/MLGeometry/releases/tag/v1.2.0
 [1.2.1]: https://github.com/yidiq7/MLGeometry/releases/tag/v1.2.1
+[1.2.2]: https://github.com/yidiq7/MLGeometry/releases/tag/v1.2.2
 [2.0.0]: https://github.com/yidiq7/MLGeometry/releases/tag/v2.0.0
