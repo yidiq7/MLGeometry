@@ -1,5 +1,4 @@
 jax
-jaxlib
 flax
 optax
 jaxopt

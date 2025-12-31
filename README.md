@@ -13,13 +13,13 @@ If you prefer the older version, please check the 'Using and Older Version' sect
 
 ## Installation
 
+*Note: This installs the CPU version of JAX by default. If you wish to use a GPU, it is recommended to install the appropriate version of JAX for your hardware before installing this package. Please refer to the [official JAX installation guide](https://jax.readthedocs.io/en/latest/installation.html) for instructions.*
+
 You can install MLGeometry using one of the following methods:
 
 ### Via PyPI
 
     pip install MLGeometry-JAX
-
-*Note: Use "MLGeometry-JAX" with the suffix when installing via pip.*
 
 ### Directly from Github
 
