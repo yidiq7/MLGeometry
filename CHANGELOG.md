@@ -2,6 +2,13 @@
 
 ## [Unreleased]
 
+## [2.0.0] - 2025-12-31
+
+### Changed
+
+We have switched the backend from `Tensorflow` to `JAX` due to flexibility and popularity.
+The API bas also been simplified accordingly. 
+Please check the usage of the updated package in the latest version of `Guide.ipynb` and training script.
 
 ## [1.2.1] - 2025-06-25
 
@@ -54,9 +61,10 @@
 
 - Multi-batch support for L-BFGS
 
-[Unreleased]: https://github.com/yidiq7/MLGeometry/compare/v1.2.0...HEAD
+[Unreleased]: https://github.com/yidiq7/MLGeometry/compare/v2.0.0...HEAD
 [1.0.1]: https://github.com/yidiq7/MLGeometry/releases/tag/v1.0.1
 [1.0.2]: https://github.com/yidiq7/MLGeometry/releases/tag/v1.0.2
 [1.1.0]: https://github.com/yidiq7/MLGeometry/releases/tag/v1.1.0
 [1.2.0]: https://github.com/yidiq7/MLGeometry/releases/tag/v1.2.0
 [1.2.1]: https://github.com/yidiq7/MLGeometry/releases/tag/v1.2.1
+[2.0.0]: https://github.com/yidiq7/MLGeometry/releases/tag/v2.0.0

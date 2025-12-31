@@ -8,38 +8,28 @@ More to come.
 
 ## Recent Changes
 
-MLGeometry has been updated to be compatible with the lastest version of TensorFlow and Keras 3, and it can now be installed directly from PyPI. If you prefer the older version, please check the 'Using and Older Version' section below.
+The backend of MLGeometry has been switched to 'JAX' from 'Tensorflow' due to the flexibility `JAX` provides and the current trend in the ML community. 
+If you prefer the older version, please check the 'Using and Older Version' section below.
 
 ## Installation
 
-### Prerequisites
-
-MLGeometry requires Python 3.11 and TensorFlow (>=2.16).
-
-Install TensorFlow by following the official installation guide: [TensorFlow Installation](https://www.tensorflow.org/install). 
-
-On Linux with GPU, TensorFlow can be installed by
-
-    pip install 'tensorflow[and-cuda]'
-
-### Installing MLGeometry
-
 You can install MLGeometry using one of the following methods:
 
-#### Via PyPI
+### Via PyPI
 
-    pip install MLGeometry-tf
+    pip install MLGeometry-JAX
 
-*Note: Use "MLGeometry-tf" with a suffix when installing via pip.*
+*Note: Use "MLGeometry-JAX" with the suffix when installing via pip.*
 
-#### Directly from Github
+### Directly from Github
 
     pip install git+https://github.com/yidiq7/MLGeometry.git
 
-#### Using an Older Version
+### Using an Older Version
 
-If you prefer to use an older version of MLGeometry based on Tensorflow 2.12 and Keras 2, you can check out the previous release (v1.1.0) here: [Version 1.1.0 Release](https://github.com/yidiq7/MLGeometry/releases/tag/v1.1.0). Follow the installation instructions provided in that release's documentation. The compatible versions of Python and CUDA can be found [here](https://www.tensorflow.org/install/source#gpu).
-
+If you prefer to use an older version of MLGeometry based on Tensorflow 2.16+ and Keras 3, you can check out the previous release (v1.2.1) here: [Version 1.2.1 Release](https://github.com/yidiq7/MLGeometry/releases/tag/v1.2.1).
+For an older version based on Tensorflow 2.12 and Keras 2, check [Version 1.1.0 Release](https://github.com/yidiq7/MLGeometry/releases/tag/v1.1.0).
+Follow the installation instructions provided in that release's documentation. The compatible versions of Python and CUDA can be found [here](https://www.tensorflow.org/install/source#gpu).
 
 ## [Sample jupyter notebook](https://github.com/yidiq7/MLGeometry/blob/main/Guide.ipynb)
 
