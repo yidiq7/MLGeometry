@@ -2,7 +2,12 @@
 
 ## [Unreleased]
 
+## [1.2.2] - 2025-06-26
 
+### Changed
+
+- Fixed the version info in pyproject.toml
+  
 ## [1.2.1] - 2025-06-25
 
 ### Changed
@@ -60,3 +65,4 @@
 [1.1.0]: https://github.com/yidiq7/MLGeometry/releases/tag/v1.1.0
 [1.2.0]: https://github.com/yidiq7/MLGeometry/releases/tag/v1.2.0
 [1.2.1]: https://github.com/yidiq7/MLGeometry/releases/tag/v1.2.1
+[1.2.2]: https://github.com/yidiq7/MLGeometry/releases/tag/v1.2.2
