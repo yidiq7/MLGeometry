@@ -27,7 +27,7 @@ You can install MLGeometry using one of the following methods:
 
 ### Using an Older Version
 
-If you prefer to use an older version of MLGeometry based on Tensorflow 2.16+ and Keras 3, you can check out the previous release (v1.2.1) here: [Version 1.2.1 Release](https://github.com/yidiq7/MLGeometry/releases/tag/v1.2.1).
+If you prefer to use an older version of MLGeometry based on Tensorflow 2.16+ and Keras 3, you can check out the previous release (v1.2.2) here: [Version 1.2.2 Release](https://github.com/yidiq7/MLGeometry/releases/tag/v1.2.2).
 
 For an older version based on Tensorflow 2.12 and Keras 2, check [Version 1.1.0 Release](https://github.com/yidiq7/MLGeometry/releases/tag/v1.1.0).
 
