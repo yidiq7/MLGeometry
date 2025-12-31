@@ -59,7 +59,7 @@
 
 - Multi-batch support for L-BFGS
 
-[Unreleased]: https://github.com/yidiq7/MLGeometry/compare/v1.2.0...HEAD
+[Unreleased]: https://github.com/yidiq7/MLGeometry/compare/v1.2.2...tf
 [1.0.1]: https://github.com/yidiq7/MLGeometry/releases/tag/v1.0.1
 [1.0.2]: https://github.com/yidiq7/MLGeometry/releases/tag/v1.0.2
 [1.1.0]: https://github.com/yidiq7/MLGeometry/releases/tag/v1.1.0
