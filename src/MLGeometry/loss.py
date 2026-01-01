@@ -6,6 +6,7 @@ from typing import Callable, Any, Optional
 import jax
 import jax.numpy as jnp
 from . import complex_math
+from . import config
 
 __all__ = [
     'weighted_MAPE', 
@@ -143,8 +144,8 @@ def make_full_dataset_loss_fn(model: Any,
             return arr
 
         dataset_padded = {k: pad_array(jnp.array(v)) for k, v in dataset.items()}
-        dataset_padded['points'] = dataset_padded['points'].astype(jnp.complex64)
-        dataset_padded['restriction'] = dataset_padded['restriction'].astype(jnp.complex64)
+        dataset_padded['points'] = dataset_padded['points'].astype(config.complex_dtype)
+        dataset_padded['restriction'] = dataset_padded['restriction'].astype(config.complex_dtype)
         
         valid_mask = jnp.concatenate([jnp.ones(n_points), jnp.zeros(pad_len)])
         

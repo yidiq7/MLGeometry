@@ -4,6 +4,7 @@ Data loading and processing utilities.
 
 import numpy as np
 import jax.numpy as jnp
+from . import config
 
 __all__ = ['generate_dataset', 'dataset_on_patch', 'to_jax']
 
@@ -58,10 +59,10 @@ def to_jax(dataset: dict) -> dict:
         Dictionary containing JAX arrays.
     """
     return {
-        'points': jnp.array(dataset['points'], dtype=jnp.complex64),
-        'Omega_Omegabar': jnp.array(dataset['Omega_Omegabar'], dtype=jnp.float32),
-        'mass': jnp.array(dataset['mass'], dtype=jnp.float32),
-        'restriction': jnp.array(dataset['restriction'], dtype=jnp.complex64)
+        'points': jnp.array(dataset['points'], dtype=config.complex_dtype),
+        'Omega_Omegabar': jnp.array(dataset['Omega_Omegabar'], dtype=config.real_dtype),
+        'mass': jnp.array(dataset['mass'], dtype=config.real_dtype),
+        'restriction': jnp.array(dataset['restriction'], dtype=config.complex_dtype)
     }
 
 
@@ -91,16 +92,16 @@ def dataset_on_patch(patch) -> dict:
     patch.r_jax = patch.num_restriction_jax()
     
     # 2. Extract Points
-    x = np.array(patch.points, dtype=np.complex64)
+    x = np.array(patch.points, dtype=config.np_complex_dtype)
     
     # 3. Compute Omega_Omegabar (Target Measure)
     # Returns float32 array
-    y = np.array(patch.num_Omega_Omegabar_jax(), dtype=np.float32)
+    y = np.array(patch.num_Omega_Omegabar_jax(), dtype=config.np_real_dtype)
     
     # 4. Compute Mass (Reference Measure)
     # Fubini-Study volume form for identity metric
     # This uses patch.r_jax internally
-    fs_vol = np.array(patch.num_FS_volume_form_jax('identity', k=1), dtype=np.float32)
+    fs_vol = np.array(patch.num_FS_volume_form_jax('identity', k=1), dtype=config.np_real_dtype)
     
     # Mass reweighting factor
     mass = y / (fs_vol + 1e-12)
@@ -113,14 +114,14 @@ def dataset_on_patch(patch) -> dict:
     # Construct projection matrix P: (n_dim-1, n_dim)
     # Removes the row corresponding to the norm coordinate (which is fixed to 1)
     trans_mat = np.delete(np.identity(patch.n_dim), patch.norm_coordinate, axis=0)
-    trans_tensor = jnp.array(trans_mat, dtype=jnp.complex64)
+    trans_tensor = jnp.array(trans_mat, dtype=config.complex_dtype)
     
     # patch.r_jax: (batch, n_manifold, n_affine)
     # trans_tensor: (n_affine, n_ambient)
     # Result: (batch, n_manifold, n_ambient)
     
     restriction = jnp.matmul(patch.r_jax, trans_tensor)
-    restriction = np.array(restriction, dtype=np.complex64)
+    restriction = np.array(restriction, dtype=config.np_complex_dtype)
 
     dataset = {
         'points': x,

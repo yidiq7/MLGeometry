@@ -9,6 +9,7 @@ from . import loss
 from . import dataset
 from . import complex_math
 from . import trainer
+from .config import set_precision
 
 __all__ = [
     'hypersurface',
@@ -17,5 +18,6 @@ __all__ = [
     'loss',
     'dataset',
     'complex_math',
-    'trainer'
+    'trainer',
+    'set_precision'
 ]

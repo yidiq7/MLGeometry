@@ -5,6 +5,7 @@ import mpmath
 from multiprocessing import Pool
 from .hypersurface import Hypersurface
 from .hypersurface import RealHypersurface
+from . import config
 
 __all__ = ['RealHypersurface', 'CICYRealHypersurface']
 
@@ -90,9 +91,9 @@ class CICYHypersurface(Hypersurface):
             
             # Reconstruct point in CP^N
             # z = t0*z0 + t1*z1 + z2 (where z0,z1,z2 are the trio vectors)
-            t_array = np.array(t_solved.tolist(), dtype=np.complex64)
+            t_array = np.array(t_solved.tolist(), dtype=config.np_complex_dtype)
             # Add 1.0 for the constant term corresponding to z2
-            t_weights = np.array([t_array[0], t_array[1], 1.0], dtype=np.complex64)
+            t_weights = np.array([t_array[0], t_array[1], 1.0], dtype=config.np_complex_dtype)
             
             # ztrio is (3, n_dim)
             point = np.dot(t_weights, np.array(ztrio))
