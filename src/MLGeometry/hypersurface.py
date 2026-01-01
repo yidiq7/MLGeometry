@@ -319,7 +319,7 @@ class Hypersurface():
             
         # Func takes coordinates
         vals = self._omega_omegabar_func(*self.points.T)
-        return jnp.array(vals, dtype=config.real_dtype)
+        return jnp.array(jnp.real(vals), dtype=config.real_dtype)
 
     def num_restriction_jax(self):
         """Vectorized restriction matrix"""

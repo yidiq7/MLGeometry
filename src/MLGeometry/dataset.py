@@ -60,8 +60,8 @@ def to_jax(dataset: dict) -> dict:
     """
     return {
         'points': jnp.array(dataset['points'], dtype=config.complex_dtype),
-        'Omega_Omegabar': jnp.array(dataset['Omega_Omegabar'], dtype=config.real_dtype),
-        'mass': jnp.array(dataset['mass'], dtype=config.real_dtype),
+        'Omega_Omegabar': jnp.array(jnp.real(dataset['Omega_Omegabar']), dtype=config.real_dtype),
+        'mass': jnp.array(jnp.real(dataset['mass']), dtype=config.real_dtype),
         'restriction': jnp.array(dataset['restriction'], dtype=config.complex_dtype)
     }
 
@@ -96,12 +96,12 @@ def dataset_on_patch(patch) -> dict:
     
     # 3. Compute Omega_Omegabar (Target Measure)
     # Returns float32 array
-    y = np.array(patch.num_Omega_Omegabar_jax(), dtype=config.np_real_dtype)
+    y = np.array(np.real(patch.num_Omega_Omegabar_jax()), dtype=config.np_real_dtype)
     
     # 4. Compute Mass (Reference Measure)
     # Fubini-Study volume form for identity metric
     # This uses patch.r_jax internally
-    fs_vol = np.array(patch.num_FS_volume_form_jax('identity', k=1), dtype=config.np_real_dtype)
+    fs_vol = np.array(np.real(patch.num_FS_volume_form_jax('identity', k=1)), dtype=config.np_real_dtype)
     
     # Mass reweighting factor
     mass = y / (fs_vol + 1e-12)
