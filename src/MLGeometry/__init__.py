@@ -2,8 +2,6 @@
 Top-level package initialization.
 """
 
-from . import config
-from .config import set_precision
 from . import hypersurface
 from . import cicyhypersurface
 from . import bihomoNN
@@ -11,10 +9,9 @@ from . import loss
 from . import dataset
 from . import complex_math
 from . import trainer
+from .config import set_precision
 
 __all__ = [
-    'config',
-    'set_precision',
     'hypersurface',
     'cicyhypersurface',
     'bihomoNN',
@@ -22,4 +19,5 @@ __all__ = [
     'dataset',
     'complex_math',
     'trainer'
+    'set_precision',
 ]
