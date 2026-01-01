@@ -47,6 +47,7 @@ def parse_args():
     parser.add_argument('--save_name', type=str, default='default_model', help='Name for saving the model.')
 
     # Training
+    parser.add_argument('--precision', type=int, default=32, choices=[32, 64], help='Floating point precision (32 or 64 bits).')
     parser.add_argument('--max_epochs', type=int, default=1000, help='Maximum number of epochs for training.')
     parser.add_argument('--loss_func', type=str, default='weighted_MAPE', choices=['weighted_MAPE', 'weighted_MSE', 'max_error', 'MAPE_plus_max_error'], help='Loss function to use.')
     parser.add_argument('--clip_threshold', type=float, default=None, help='Gradient clipping threshold. If None, no clipping.')
@@ -62,6 +63,10 @@ def parse_args():
 def main():
     """Main function to setup and run the training process."""
     args = parse_args()
+    
+    # Set global precision before any JAX operations
+    mlg.set_precision(args.precision)
+    
     print(f"--- Processing Model: {args.save_name} ---")
 
     # Set random seeds
@@ -252,6 +257,7 @@ def main():
         f.write(f'n_pairs = {args.n_pairs} \n')
         f.write(f'n_points = {HS_train.n_points} \n')
         f.write(f'batch_size = {args.batch_size} \n')
+        f.write(f'precision = {args.precision} \n')
         f.write(f'function = {args.function} \n')
         f.write(f'psi = {args.psi} \n')
         if args.function == 'f1':
