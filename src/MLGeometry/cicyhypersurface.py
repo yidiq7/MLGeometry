@@ -2,7 +2,7 @@ import logging
 import numpy as np
 import sympy as sp
 import mpmath
-from multiprocessing import Pool
+import multiprocessing as mp
 from .hypersurface import Hypersurface
 from .hypersurface import RealHypersurface
 from . import config
@@ -56,7 +56,7 @@ class CICYHypersurface(Hypersurface):
 
     def solve_points_multiprocessing(self, coeffs_list, monoms_list, ztrios):
         points = []
-        with Pool() as pool:
+        with mp.get_context('spawn').Pool() as pool:
             for point in pool.starmap(CICYHypersurface.solve_poly, zip(coeffs_list, monoms_list, ztrios)):
                 if point is not None:
                     points.append(point)
@@ -249,7 +249,7 @@ class RealCICYHypersurface(CICYHypersurface, RealHypersurface):
 
     def solve_points_multiprocessing(self, coeffs_list, monoms_list, ztrios):
         points = []
-        with Pool() as pool:
+        with mp.get_context('spawn').Pool() as pool:
             for point in pool.starmap(RealCICYHypersurface.solve_poly, zip(coeffs_list, monoms_list, ztrios)):
                 if point is not None:
                     points.append(point)

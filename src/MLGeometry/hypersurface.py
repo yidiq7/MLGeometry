@@ -1,6 +1,6 @@
 """Defines a Python class for hypersurfaces"""  
 
-from multiprocessing import Pool
+import multiprocessing as mp
 import mpmath
 import numpy as np
 import sympy as sp
@@ -76,7 +76,8 @@ class Hypersurface():
 
     def solve_points_multiprocessing(self, zpairs, get_coeff):
         points = []
-        with Pool() as pool:
+        # Use 'spawn' context to avoid JAX/fork deadlock issues
+        with mp.get_context('spawn').Pool() as pool:
             # Pre-calculate coefficients for all pairs
             # zpairs is list of [pt1, pt2]. pt1 is list of coords.
             # get_coeff takes (a_vec, b_vec)
@@ -443,7 +444,7 @@ class RealHypersurface(Hypersurface):
 
     def solve_points_multiprocessing(self, zpairs, get_coeff):
         points = []
-        with Pool() as pool:
+        with mp.get_context('spawn').Pool() as pool:
             coeffs_iter = [get_coeff(zp[0], zp[1]) for zp in zpairs]
             for points_d in pool.starmap(RealHypersurface.solve_poly_real, zip(zpairs, coeffs_iter)):
                 points.extend(points_d)
