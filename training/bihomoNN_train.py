@@ -212,11 +212,11 @@ def main():
     # --- Final Evaluation ---
     print("\n--- Final Evaluation ---")
     sigma_train = mlg.loss.evaluate_dataset(model, params, train_set, mlg.loss.weighted_MAPE, args.batch_size)
-    sigma_test = mlg.loss.evaluate_dataset(model, params, test_set, mlg.loss.weighted_MAPE, args.batch_size)
+    sigma_test = mlg.loss.evaluate_dataset(model, params, test_set, mlg.loss.weighted_MAPE, args.batch_size*10)
     E_train = mlg.loss.evaluate_dataset(model, params, train_set, mlg.loss.weighted_MSE, args.batch_size)
-    E_test = mlg.loss.evaluate_dataset(model, params, test_set, mlg.loss.weighted_MSE, args.batch_size)
+    E_test = mlg.loss.evaluate_dataset(model, params, test_set, mlg.loss.weighted_MSE, args.batch_size*10)
     sigma_max_train = mlg.loss.evaluate_dataset(model, params, train_set, mlg.loss.max_error, args.batch_size)
-    sigma_max_test = mlg.loss.evaluate_dataset(model, params, test_set, mlg.loss.max_error, args.batch_size)
+    sigma_max_test = mlg.loss.evaluate_dataset(model, params, test_set, mlg.loss.max_error, args.batch_size*10)
 
     # Delta Sigma calculation
     def delta_sigma_square_metric_maker(sigma_val: jnp.ndarray):
@@ -226,7 +226,7 @@ def main():
         return metric_func
 
     delta_sigma_train_sq = mlg.loss.evaluate_dataset(model, params, train_set, delta_sigma_square_metric_maker(sigma_train), args.batch_size)
-    delta_sigma_test_sq = mlg.loss.evaluate_dataset(model, params, test_set, delta_sigma_square_metric_maker(sigma_test), args.batch_size)
+    delta_sigma_test_sq = mlg.loss.evaluate_dataset(model, params, test_set, delta_sigma_square_metric_maker(sigma_test), args.batch_size*10)
     delta_sigma_train = math.sqrt(delta_sigma_train_sq.item() / HS_train.n_points)
     delta_sigma_test = math.sqrt(delta_sigma_test_sq.item() / HS_test.n_points)
 
@@ -238,7 +238,7 @@ def main():
         return metric_func
     
     delta_E_train_sq = mlg.loss.evaluate_dataset(model, params, train_set, delta_E_square_metric_maker(E_train), args.batch_size)
-    delta_E_test_sq = mlg.loss.evaluate_dataset(model, params, test_set, delta_E_square_metric_maker(E_test), args.batch_size)
+    delta_E_test_sq = mlg.loss.evaluate_dataset(model, params, test_set, delta_E_square_metric_maker(E_test), args.batch_size*10)
     delta_E_train = math.sqrt(delta_E_train_sq.item() / HS_train.n_points)
     delta_E_test = math.sqrt(delta_E_test_sq.item() / HS_test.n_points)
 
