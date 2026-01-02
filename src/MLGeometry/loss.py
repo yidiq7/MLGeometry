@@ -101,6 +101,10 @@ def compute_loss(model: Any,
     # Normalize (Local Batch Normalization)
     weights = mass / jnp.sum(mass)
     factor = jnp.sum(weights * det_vol / omega_omegabar)
+    
+    # Treat normalization factor as constant during backprop
+    factor = jax.lax.stop_gradient(factor)
+    
     det_omega = det_vol / factor
     
     return loss_metric(omega_omegabar, det_omega, mass)
@@ -169,6 +173,9 @@ def make_full_dataset_loss_fn(model: Any,
             
             safe_omega = omega_flat + (1.0 - valid_mask)
             factor = jnp.sum(weights * all_vols / safe_omega)
+            
+            # Treat normalization factor as constant during backprop
+            factor = jax.lax.stop_gradient(factor)
             
             return loss_metric(omega_flat, all_vols / factor, mass_flat)
 
