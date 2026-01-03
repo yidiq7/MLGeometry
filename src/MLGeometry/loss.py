@@ -10,8 +10,10 @@ from . import config
 
 __all__ = [
     'weighted_MAPE', 
-    'weighted_MSE', 
+    'weighted_MSPE', 
+    'weighted_RMSE', 
     'max_error', 
+    'max_abs_error', 
     'MAPE_plus_max_error',
     'compute_loss',
     'compute_cy_metric',
@@ -27,15 +29,26 @@ def weighted_MAPE(y_true: jnp.ndarray, y_pred: jnp.ndarray, mass: jnp.ndarray) -
     return jnp.sum(jnp.abs(y_true - y_pred) / y_true * weights)
 
 
-def weighted_MSE(y_true: jnp.ndarray, y_pred: jnp.ndarray, mass: jnp.ndarray) -> jnp.ndarray:
-    """Weighted Mean Squared Error (of the ratio - 1)."""
+def weighted_MSPE(y_true: jnp.ndarray, y_pred: jnp.ndarray, mass: jnp.ndarray) -> jnp.ndarray:
+    """Weighted Mean Squared Percentage Error."""
     weights = mass / jnp.sum(mass)
     return jnp.sum(jnp.square(y_pred / y_true - 1) * weights)
 
 
+def weighted_RMSE(y_true: jnp.ndarray, y_pred: jnp.ndarray, mass: jnp.ndarray) -> jnp.ndarray:
+    """Weighted Root Mean Squared Error."""
+    weights = mass / jnp.sum(mass)
+    return jnp.sqrt(jnp.sum(jnp.square(y_pred - y_true) * weights))
+
+
 def max_error(y_true: jnp.ndarray, y_pred: jnp.ndarray, mass: jnp.ndarray) -> jnp.ndarray:
-    """Maximum relative error."""
+    """Maximum Percentage Error."""
     return jnp.max(jnp.abs(y_true - y_pred) / y_true)
+
+
+def max_abs_error(y_true: jnp.ndarray, y_pred: jnp.ndarray, mass: jnp.ndarray) -> jnp.ndarray:
+    """Maximum Absolute Error."""
+    return jnp.max(jnp.abs(y_true - y_pred))
 
 
 def MAPE_plus_max_error(y_true: jnp.ndarray, y_pred: jnp.ndarray, mass: jnp.ndarray) -> jnp.ndarray:
@@ -104,6 +117,34 @@ def compute_loss(model: Any,
     det_omega = det_vol / factor
     
     return loss_metric(omega_omegabar, det_omega, mass)
+
+
+def compute_residual_loss(
+        model: Any,
+        params: Any,
+        batch: dict,
+        residue_amp: config.real_dtype,
+        loss_metric: Callable[[jnp.ndarray, jnp.ndarray, jnp.ndarray], jnp.ndarray]) -> jnp.ndarray:
+
+    omega_omegabar = batch['Omega_Omegabar']
+    mass = batch['mass']
+    metric0 = batch['cymetric']
+
+    # The coefficient residue_amp should be included within the model already
+    metric1 = compute_cy_metric(model, params, batch)
+    metric = metric0 + metric1
+
+    det_vol = jnp.real(jax.vmap(jnp.linalg.det)(metric))
+
+    # Here we use the factor of the old detg
+    # In principle this should consider detg_diff as well, with proper scaling 
+    weights = mass / jnp.sum(mass)
+    factor = jnp.sum(weights * det_vol / omega_omegabar)
+    factor = jax.lax.stop_gradient(factor)
+
+    det_omega = det_vol / factor
+
+    return loss_metric(omega_omegabar/residue_amp, det_omega/residue_amp, mass)
 
 
 def _compute_unnormalized_volumes(model, params, batch):

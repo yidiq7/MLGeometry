@@ -49,7 +49,7 @@ def parse_args():
     # Training
     parser.add_argument('--precision', type=int, default=32, choices=[32, 64], help='Floating point precision (32 or 64 bits).')
     parser.add_argument('--max_epochs', type=int, default=1000, help='Maximum number of epochs for training.')
-    parser.add_argument('--loss_func', type=str, default='weighted_MAPE', choices=['weighted_MAPE', 'weighted_MSE', 'max_error', 'MAPE_plus_max_error'], help='Loss function to use.')
+    parser.add_argument('--loss_func', type=str, default='weighted_MAPE', choices=['weighted_MAPE', 'weighted_MSPE', 'weighted_RMSE', 'max_error', 'max_abs_error', 'MAPE_plus_max_error'], help='Loss function to use.')
     parser.add_argument('--clip_threshold', type=float, default=None, help='Gradient clipping threshold. If None, no clipping.')
     parser.add_argument('--optimizer', type=str, default='Adam', choices=['Adam', 'SGD', 'LBFGS'], help='Optimizer to use.')
     parser.add_argument('--learning_rate', type=float, default=0.001, help='Learning rate for Adam/SGD.')
@@ -142,8 +142,9 @@ def main():
     # --- Loss Function Setup ---
     loss_func_map = {
         "weighted_MAPE": mlg.loss.weighted_MAPE,
-        "weighted_MSE": mlg.loss.weighted_MSE,
+        "weighted_MSPE": mlg.loss.weighted_MSPE,
         "max_error": mlg.loss.max_error,
+        "max_abs_error": mlg.loss.max_abs_error,
         "MAPE_plus_max_error": mlg.loss.MAPE_plus_max_error
     }
     loss_metric = loss_func_map[args.loss_func]
@@ -213,8 +214,8 @@ def main():
     print("\n--- Final Evaluation ---")
     sigma_train = mlg.loss.evaluate_dataset(model, params, train_set, mlg.loss.weighted_MAPE, args.batch_size)
     sigma_test = mlg.loss.evaluate_dataset(model, params, test_set, mlg.loss.weighted_MAPE, args.batch_size*10)
-    E_train = mlg.loss.evaluate_dataset(model, params, train_set, mlg.loss.weighted_MSE, args.batch_size)
-    E_test = mlg.loss.evaluate_dataset(model, params, test_set, mlg.loss.weighted_MSE, args.batch_size*10)
+    E_train = mlg.loss.evaluate_dataset(model, params, train_set, mlg.loss.weighted_MSPE, args.batch_size)
+    E_test = mlg.loss.evaluate_dataset(model, params, test_set, mlg.loss.weighted_MSPE, args.batch_size*10)
     sigma_max_train = mlg.loss.evaluate_dataset(model, params, train_set, mlg.loss.max_error, args.batch_size)
     sigma_max_test = mlg.loss.evaluate_dataset(model, params, test_set, mlg.loss.max_error, args.batch_size*10)
 

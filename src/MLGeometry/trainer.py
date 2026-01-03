@@ -41,6 +41,7 @@ def train_optax(model: Any,
                 batch_size: int,
                 loss_metric: Callable,
                 params: Optional[Any] = None,
+                residue_amp: Optional[config.real_dtype] = None,
                 seed: int = 42,
                 verbose: bool = True,
                 history: Optional[list] = None) -> Tuple[Any, float]:
@@ -81,9 +82,15 @@ def train_optax(model: Any,
     # Define JIT-compiled step function
     @jax.jit
     def step(current_params, current_opt_state, batch_data):
-        loss_val, grads = jax.value_and_grad(
-            lambda p: mlg_loss.compute_loss(model, p, batch_data, loss_metric)
-        )(current_params)
+        if residue_amp is None:
+            loss_val, grads = jax.value_and_grad(
+                lambda p: mlg_loss.compute_loss(model, p, batch_data, loss_metric)
+            )(current_params)
+        else:
+            loss_val, grads = jax.value_and_grad(
+                lambda p: mlg_loss.compute_residual_loss(model, p, batch_data, residue_amp, loss_metric)
+            )(current_params)
+             
         updates, new_opt_state = optimizer.update(grads, current_opt_state, current_params)
         new_params = optax.apply_updates(current_params, updates)
         return new_params, new_opt_state, loss_val
