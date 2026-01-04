@@ -20,7 +20,7 @@ from models import (
     zerolayer, onelayer, twolayers, threelayers, fourlayers, fivelayers,
     OuterProductNN_k2, OuterProductNN_k3, OuterProductNN_k4,
     k2_twolayers, k2_threelayers, k4_onelayer, k4_twolayers,
-    Kahler_potential
+    BihomogeneousNetwork, SpectralNetwork
 )
 
 
@@ -124,8 +124,8 @@ def main():
             raise ValueError(f"k4_as_first_layer only supports n_hidden=0 (1layer) or n_hidden=1 (2layers). Got {n_hidden}")
         model = model_cls(n_units)
     else:
-        # Simplified using dynamic Kahler_potential class
-        model = Kahler_potential(layers=n_units, d=len(Z))
+        # Simplified using dynamic BihomogeneousNetwork class
+        model = BihomogeneousNetwork(layers=n_units, d=len(Z))
 
     # Load pre-trained parameters if specified
     params = None

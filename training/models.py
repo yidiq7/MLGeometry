@@ -6,13 +6,34 @@ from typing import Sequence, Any, List
 __all__ = ['zerolayer', 'onelayer', 'twolayers', 'threelayers', 'fourlayers', 
            'fivelayers','OuterProductNN_k2','OuterProductNN_k3','OuterProductNN_k4',
            'k2_twolayers', 'k2_threelayers','k4_onelayer','k4_twolayers',
-           'Kahler_potential']
+           'BihomogeneousNetwork', 'SpectralNetwork']
 
 # Helper activation
 def square_activation(x):
     return x**2
 
-class Kahler_potential(nn.Module):
+class SpectralNetwork(nn.Module):
+    """
+    A network based on the Spectral layer, which normalizes bihomogeneous terms.
+    """
+    layers: Sequence[int]
+    activation: Callable = square_activation
+    d: int = 5
+
+    @nn.compact
+    def __call__(self, inputs: jnp.ndarray) -> jnp.ndarray:
+        x = bnn.Spectral(d=self.d)(inputs)
+        
+        for feat in self.layers:
+            x = bnn.SquareDense(features=feat, activation=self.activation)(x)
+            
+        # Final layer to produce a single value
+        x = bnn.SquareDense(features=1, activation=None)(x)
+        
+        return jnp.log(x)
+
+
+class BihomogeneousNetwork(nn.Module):
     # Attributes (Hyperparameters)
     layers: Sequence[int]
     amp: Any = 1.0

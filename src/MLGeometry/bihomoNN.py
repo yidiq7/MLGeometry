@@ -13,6 +13,7 @@ from . import config
 
 __all__ = [
     'Bihomogeneous',
+    'Spectral',
     'Bihomogeneous_k2',
     'Bihomogeneous_k3',
     'Bihomogeneous_k4',
@@ -53,6 +54,27 @@ class Bihomogeneous(nn.Module):
         # Concatenate Real and Imaginary parts
         # Note: Diagonal elements are real, so imag part is 0, but kept for structural consistency
         return jnp.concatenate([jnp.real(zzbar_flat), jnp.imag(zzbar_flat)], axis=-1)
+
+
+class Spectral(nn.Module):
+    """
+    Normalized Bihomogeneous layer: (z_i * z_j_bar) / |z|^2.
+    Used in Spectral Networks.
+    """
+    d: int = 5
+
+    @nn.compact
+    def __call__(self, inputs: jnp.ndarray) -> jnp.ndarray:
+        # Compute |z|^2
+        # inputs is complex (..., d)
+        norm_sq = jnp.sum(jnp.abs(inputs)**2, axis=-1, keepdims=True)
+        
+        # Get standard bihomogeneous terms
+        # Shape (..., d*(d+1))
+        bh_terms = Bihomogeneous(d=self.d)(inputs)
+        
+        # Avoid division by zero (though z shouldn't be 0 in CP^N)
+        return bh_terms / (norm_sq + 1e-12)
 
 
 class Bihomogeneous_k2(nn.Module):
