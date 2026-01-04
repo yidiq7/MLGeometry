@@ -142,6 +142,7 @@ def train_lbfgs(model: Any,
                 loss_metric: Callable,
                 params: Optional[Any] = None,
                 batch_size: Optional[int] = None,
+                residue_amp: Optional[config.real_dtype] = None,
                 seed: int = 42,
                 verbose: bool = True,
                 history: Optional[list] = None) -> Tuple[Any, float]:
@@ -172,7 +173,7 @@ def train_lbfgs(model: Any,
         params = init_params(model, (input_dim,), seed)
 
     loss_fn = mlg_loss.make_full_dataset_loss_fn(
-        model, dataset, loss_metric, batch_size=batch_size
+        model, dataset, loss_metric, batch_size=batch_size, residue_amp=residue_amp
     )
 
     if verbose:

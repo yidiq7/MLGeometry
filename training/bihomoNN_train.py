@@ -19,7 +19,8 @@ from MLGeometry import bihomoNN as bnn
 from models import (
     zerolayer, onelayer, twolayers, threelayers, fourlayers, fivelayers,
     OuterProductNN_k2, OuterProductNN_k3, OuterProductNN_k4,
-    k2_twolayers, k2_threelayers, k4_onelayer, k4_twolayers
+    k2_twolayers, k2_threelayers, k4_onelayer, k4_twolayers,
+    Kahler_potential
 )
 
 
@@ -123,11 +124,8 @@ def main():
             raise ValueError(f"k4_as_first_layer only supports n_hidden=0 (1layer) or n_hidden=1 (2layers). Got {n_hidden}")
         model = model_cls(n_units)
     else:
-        model_list_general = {0: zerolayer, 1: onelayer, 2: twolayers, 3: threelayers, 4: fourlayers, 5: fivelayers}
-        model_cls = model_list_general.get(n_hidden)
-        if model_cls is None:
-            raise ValueError(f"General layers supports n_hidden from 0 to 5. Got {n_hidden}")
-        model = model_cls(n_units)
+        # Simplified using dynamic Kahler_potential class
+        model = Kahler_potential(layers=n_units, d=len(Z))
 
     # Load pre-trained parameters if specified
     params = None

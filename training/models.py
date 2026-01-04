@@ -1,15 +1,37 @@
 from flax import linen as nn
 import jax.numpy as jnp
 from MLGeometry import bihomoNN as bnn
-from typing import Sequence
+from typing import Sequence, Any, List
 
 __all__ = ['zerolayer', 'onelayer', 'twolayers', 'threelayers', 'fourlayers', 
            'fivelayers','OuterProductNN_k2','OuterProductNN_k3','OuterProductNN_k4',
-           'k2_twolayers', 'k2_threelayers','k4_onelayer','k4_twolayers']
+           'k2_twolayers', 'k2_threelayers','k4_onelayer','k4_twolayers',
+           'Kahler_potential']
 
 # Helper activation
 def square_activation(x):
     return x**2
+
+class Kahler_potential(nn.Module):
+    # Attributes (Hyperparameters)
+    layers: Sequence[int]
+    amp: Any = 1.0
+    d: int = 5
+
+    @nn.compact
+    def __call__(self, inputs: jnp.ndarray) -> jnp.ndarray:
+        x = bnn.Bihomogeneous(d=self.d)(inputs)
+        
+        # Dynamically create layers based on the 'layers' list
+        # The list 'layers' contains hidden layer sizes. 
+        # The final density reduction to 1 feature is handled after the loop.
+        for feat in self.layers:
+            x = bnn.SquareDense(features=feat, activation=square_activation)(x)
+            
+        # Final layer
+        x = bnn.SquareDense(features=1, activation=None)(x)
+        
+        return self.amp * jnp.log(x)
 
 class zerolayer(nn.Module):
     n_units: Sequence[int] # Not used but for consistency with interface

@@ -5,6 +5,7 @@ Loss functions and objective factories for Calabi-Yau metric learning.
 from typing import Callable, Any, Optional
 import jax
 import jax.numpy as jnp
+import logging
 from . import complex_math
 from . import config
 
@@ -15,6 +16,7 @@ __all__ = [
     'max_error', 
     'max_abs_error', 
     'MAPE_plus_max_error',
+    'weighted_MAPE_amp_scaled', 
     'compute_loss',
     'compute_cy_metric',
     'make_full_dataset_loss_fn'
@@ -59,6 +61,11 @@ def MAPE_plus_max_error(y_true: jnp.ndarray, y_pred: jnp.ndarray, mass: jnp.ndar
 def eta_array(y_true: jnp.ndarray, y_pred: jnp.ndarray, mass: jnp.ndarray) -> jnp.ndarray:
     return y_pred / y_true
 
+
+def weighted_MAPE_amp_scaled(y_true: jnp.ndarray, y_pred: jnp.ndarray, mass: jnp.ndarray, amp: Any) -> jnp.ndarray:
+    """Weighted Mean Absolute Percentage Error, scaled by amplitude"""
+    weights = mass / jnp.sum(mass)
+    return jnp.sum(jnp.abs(y_true - y_pred) / y_true * weights) / amp
 
 # --- Core Logic ---
 
@@ -144,21 +151,27 @@ def compute_residual_loss(
 
     det_omega = det_vol / factor
 
-    return loss_metric(omega_omegabar/residue_amp, det_omega/residue_amp, mass)
+    if 'amp_scaled' in loss_metric.__name__:
+        return loss_metric(omega_omegabar, det_omega, mass, residue_amp)
+    else:
+        return loss_metric(omega_omegabar, det_omega, mass)
 
 
-def _compute_unnormalized_volumes(model, params, batch):
+def _compute_unnormalized_volumes(model, params, batch, metric0=None):
     """
     Computes unnormalized volume determinants. Helper for accumulated gradients.
     """
     metric_restricted = compute_cy_metric(model, params, batch)
+    if metric0 is not None:
+        metric_restricted = metric_restricted + metric0
     return jnp.real(jax.vmap(jnp.linalg.det)(metric_restricted))
 
 
 def make_full_dataset_loss_fn(model: Any, 
                    dataset: dict, 
                    loss_metric: Callable[[jnp.ndarray, jnp.ndarray, jnp.ndarray], jnp.ndarray],
-                   batch_size: Optional[int] = None) -> Callable:
+                   batch_size: Optional[int] = None,
+                   residue_amp: Optional[config.real_dtype] = None) -> Callable:
     """
     Creates a closure that takes `params` and returns scalar loss.
     Supports memory-efficient gradient accumulation if batch_size is set.
@@ -168,7 +181,10 @@ def make_full_dataset_loss_fn(model: Any,
     if batch_size is None:
         # --- Full Batch Mode ---
         def loss_fn(params):
-            return compute_loss(model, params, dataset, loss_metric)
+            if residue_amp is None:
+                return compute_loss(model, params, dataset, loss_metric)
+            else:
+                return compute_residual_loss(model, params, dataset, residue_amp, loss_metric)
         return loss_fn
 
     else:
@@ -187,6 +203,8 @@ def make_full_dataset_loss_fn(model: Any,
         dataset_padded = {k: pad_array(jnp.array(v)) for k, v in dataset.items()}
         dataset_padded['points'] = dataset_padded['points'].astype(config.complex_dtype)
         dataset_padded['restriction'] = dataset_padded['restriction'].astype(config.complex_dtype)
+        if residue_amp is not None and 'cymetric' in dataset_padded:
+             dataset_padded['cymetric'] = dataset_padded['cymetric'].astype(config.complex_dtype)
         
         valid_mask = jnp.concatenate([jnp.ones(n_points), jnp.zeros(pad_len)])
         
@@ -196,7 +214,8 @@ def make_full_dataset_loss_fn(model: Any,
         
         @jax.checkpoint
         def scan_step(params, batch_chunk):
-            return _compute_unnormalized_volumes(model, params, batch_chunk)
+            metric0 = batch_chunk['cymetric'] if residue_amp is not None else None
+            return _compute_unnormalized_volumes(model, params, batch_chunk, metric0)
 
         def loss_fn_accumulated(params):
             batched_vols = jax.lax.map(lambda b: scan_step(params, b), batched_data)
@@ -214,12 +233,15 @@ def make_full_dataset_loss_fn(model: Any,
             # Treat normalization factor as constant during backprop
             factor = jax.lax.stop_gradient(factor)
             
-            return loss_metric(omega_flat, all_vols / factor, mass_flat)
+            if residue_amp is not None and 'amp_scaled' in loss_metric.__name__:
+                return loss_metric(omega_flat, all_vols / factor, mass_flat, residue_amp)
+            else:
+                return loss_metric(omega_flat, all_vols / factor, mass_flat)
 
         return loss_fn_accumulated
 
-def evaluate_dataset(model: Any, current_params: Any, dataset: dict, metric_func: Callable, batch_size: Optional[int] = None) -> jnp.ndarray:
-    loss_fn_wrapped = make_full_dataset_loss_fn(model, dataset, metric_func, batch_size=batch_size)
+def evaluate_dataset(model: Any, current_params: Any, dataset: dict, metric_func: Callable, batch_size: Optional[int] = None, residue_amp: Optional[config.real_dtype] = None) -> jnp.ndarray:
+    loss_fn_wrapped = make_full_dataset_loss_fn(model, dataset, metric_func, batch_size=batch_size, residue_amp=residue_amp)
 
     # JIT the returned function
     #jitted_loss_fn = jax.jit(loss_fn_wrapped)
