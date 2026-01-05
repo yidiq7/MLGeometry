@@ -1,7 +1,7 @@
 from flax import linen as nn
 import jax.numpy as jnp
 from MLGeometry import bihomoNN as bnn
-from typing import Sequence, Any, List
+from typing import Sequence, Any, List, Callable
 
 __all__ = ['zerolayer', 'onelayer', 'twolayers', 'threelayers', 'fourlayers', 
            'fivelayers','OuterProductNN_k2','OuterProductNN_k3','OuterProductNN_k4',
@@ -13,7 +13,7 @@ class SpectralNetwork(nn.Module):
     A network based on the Spectral layer, which normalizes bihomogeneous terms.
     """
     layers: Sequence[int]
-    activation: Callable = square_activation
+    activation: Callable = nn.silu
     d: int = 5
 
     @nn.compact
@@ -21,12 +21,13 @@ class SpectralNetwork(nn.Module):
         x = bnn.Spectral(d=self.d)(inputs)
         
         for feat in self.layers:
-            x = bnn.SquareDense(features=feat, activation=self.activation)(x)
+            x = nn.Dense(features=feat)(x)
+            x = self.activation(x)
             
         # Final layer to produce a single value
-        x = bnn.SquareDense(features=1, activation=None)(x)
+        x = nn.Dense(features=1)(x)
         
-        return jnp.log(x)
+        return x
 
 
 class BihomogeneousNetwork(nn.Module):

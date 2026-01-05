@@ -39,6 +39,7 @@ def parse_args():
     parser.add_argument('--alpha', type=float, default=0.0, help='Parameter alpha for function f2.')
 
     # Network
+    parser.add_argument('--model_type', type=str, default='bihomogeneous', choices=['bihomogeneous', 'spectral'], help='Type of model architecture.')
     parser.add_argument('--OuterProductNN_k', type=int, default=None, help='Use OuterProductNN for specific k (2,3,4).')
     parser.add_argument('--layers', type=str, default='70_100', help='Hidden layer sizes, e.g., "70_100" for two layers.')
     parser.add_argument('--k2_as_first_layer', action='store_true', help='Use k=2 bihomogeneous layer as first layer.')
@@ -52,7 +53,7 @@ def parse_args():
     parser.add_argument('--max_epochs', type=int, default=1000, help='Maximum number of epochs for training.')
     parser.add_argument('--loss_func', type=str, default='weighted_MAPE', choices=['weighted_MAPE', 'weighted_MSPE', 'weighted_RMSE', 'max_error', 'max_abs_error', 'MAPE_plus_max_error'], help='Loss function to use.')
     parser.add_argument('--clip_threshold', type=float, default=None, help='Gradient clipping threshold. If None, no clipping.')
-    parser.add_argument('--optimizer', type=str, default='Adam', choices=['Adam', 'SGD', 'LBFGS'], help='Optimizer to use.')
+    parser.add_argument('--optimizer', type=str, default='Adam', choices=['Adam', 'SGD', 'LBFGS', 'KFAC'], help='Optimizer to use.')
     parser.add_argument('--learning_rate', type=float, default=0.001, help='Learning rate for Adam/SGD.')
     parser.add_argument('--decay_rate', type=float, default=1.0, help='Learning rate decay rate for Adam.')
     parser.add_argument('--num_correction_pairs', type=int, default=10, help='Number of correction pairs for L-BFGS.')
@@ -163,6 +164,18 @@ def main():
             loss_metric=loss_metric,
             params=params,
             batch_size=args.batch_size or 2048,
+            verbose=True,
+            history=training_history
+        )
+    elif args.optimizer.upper() == 'KFAC':
+        train_batch_size = args.batch_size if args.batch_size is not None else 1000
+        params, final_loss = mlg.trainer.train_kfac(
+            model=model,
+            dataset=train_set,
+            epochs=args.max_epochs,
+            batch_size=train_batch_size,
+            loss_metric=loss_metric,
+            params=params,
             verbose=True,
             history=training_history
         )
