@@ -17,6 +17,7 @@ __all__ = [
     'max_abs_error', 
     'MAPE_plus_max_error',
     'weighted_MAPE_amp_scaled', 
+    'weighted_MSPE_amp_scaled',
     'compute_loss',
     'compute_cy_metric',
     'make_full_dataset_loss_fn'
@@ -66,6 +67,12 @@ def weighted_MAPE_amp_scaled(y_true: jnp.ndarray, y_pred: jnp.ndarray, mass: jnp
     """Weighted Mean Absolute Percentage Error, scaled by amplitude"""
     weights = mass / jnp.sum(mass)
     return jnp.sum(jnp.abs(y_true - y_pred) / y_true * weights) / amp
+
+
+def weighted_MSPE_amp_scaled(y_true: jnp.ndarray, y_pred: jnp.ndarray, mass: jnp.ndarray, amp: Any) -> jnp.ndarray:
+    """Weighted Mean Squared Percentage Error, scaled by amplitude squared"""
+    weights = mass / jnp.sum(mass)
+    return jnp.sum(jnp.square(y_pred / y_true - 1) * weights) / (amp**2)
 
 # --- Core Logic ---
 

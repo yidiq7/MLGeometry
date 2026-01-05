@@ -8,11 +8,12 @@ import jax
 import jax.numpy as jnp
 import optax
 import jaxopt
+import kfac_jax
 import numpy as np
 from . import loss as mlg_loss
 from . import config
 
-__all__ = ['train_optax', 'train_lbfgs', 'init_params']
+__all__ = ['train_optax', 'train_lbfgs', 'train_kfac', 'init_params']
 
 
 def init_params(model: Any, input_shape: Sequence[int], seed: int = 42) -> Any:
@@ -130,6 +131,149 @@ def train_optax(model: Any,
     total_time = time.time() - start_time
     if verbose:
         msg = f"Training finished in {total_time:.2f}s. Final Loss: {avg_loss:.5f}"
+        print(msg)
+        if history is not None: history.append(msg)
+        
+    return params, avg_loss
+
+
+def train_kfac(model: Any,
+               dataset: Dict[str, jnp.ndarray],
+               epochs: int,
+               batch_size: int,
+               loss_metric: Callable,
+               params: Optional[Any] = None,
+               residue_amp: Optional[config.real_dtype] = None,
+               seed: int = 42,
+               verbose: bool = True,
+               history: Optional[list] = None) -> Tuple[Any, float]:
+    """
+    Runs a training loop using the K-FAC (Kronecker-Factored Approximate Curvature) optimizer.
+    
+    Args:
+        model: Flax model.
+        dataset: Data dictionary.
+        epochs: Number of training epochs.
+        batch_size: Mini-batch size.
+        loss_metric: Metric function.
+        params: Initial parameters.
+        residue_amp: Optional scaling factor for residual loss.
+        seed: Random seed.
+        verbose: Print progress.
+        history: Optional list to append log messages.
+        
+    Returns:
+        (trained_params, final_loss)
+    """
+    # Auto-initialize parameters if not provided
+    if params is None:
+        input_dim = dataset['points'].shape[-1]
+        if verbose:
+            msg = f"Initializing parameters for input dimension {input_dim}..."
+            print(msg)
+            if history is not None: history.append(msg)
+        params = init_params(model, (input_dim,), seed)
+
+    rng = jax.random.PRNGKey(seed)
+    
+    # Define internal loss function for K-FAC with registration
+    def loss_func_kfac(p, batch):
+        omega_omegabar = batch['Omega_Omegabar']
+        mass = batch['mass']
+        
+        # Determine if we use residual physics
+        metric0 = batch.get('cymetric', None) if residue_amp is not None else None
+        
+        # Forward pass
+        metric1 = mlg_loss.compute_cy_metric(model, p, batch)
+        metric = metric1 + metric0 if metric0 is not None else metric1
+        det_vol = jnp.real(jax.vmap(jnp.linalg.det)(metric))
+        
+        weights = mass / jnp.sum(mass)
+        factor = jnp.sum(weights * det_vol / omega_omegabar)
+        factor = jax.lax.stop_gradient(factor)
+        det_omega = det_vol / factor
+        
+        # Registration for K-FAC curvature approximation
+        # We register the ratio det_omega/omega_omegabar against 1.0
+        ratio = det_omega / omega_omegabar
+        target = jnp.ones_like(ratio)
+        w_normalized = jnp.sqrt(mass)
+        
+        kfac_jax.register_squared_error_loss(
+            ratio[:, None] * w_normalized[:, None], 
+            target[:, None] * w_normalized[:, None]
+        )
+        
+        # Compute the actual loss to return
+        if residue_amp is not None and 'amp_scaled' in loss_metric.__name__:
+            loss_val = loss_metric(omega_omegabar, det_omega, mass, residue_amp)
+        else:
+            loss_val = loss_metric(omega_omegabar, det_omega, mass)
+            
+        return loss_val, {}
+
+    # Initialize K-FAC Optimizer
+    optimizer = kfac_jax.Optimizer(
+        value_and_grad_func=jax.value_and_grad(loss_func_kfac, has_aux=True),
+        l2_reg=0.0,
+        value_func_has_aux=True,
+        value_func_has_rng=False,
+        use_adaptive_learning_rate=True,
+        use_adaptive_momentum=True,
+        use_adaptive_damping=True,
+        initial_damping=1.0,
+        multi_device=False,
+        num_burnin_steps=0
+    )
+
+    # Initialize optimizer state
+    dummy_batch = jax.tree_util.tree_map(lambda x: x[:batch_size], dataset)
+    rng, init_rng = jax.random.split(rng)
+    opt_state = optimizer.init(params, init_rng, dummy_batch)
+
+    num_points = dataset['points'].shape[0]
+    num_batches = int(np.ceil(num_points / batch_size))
+
+    if verbose:
+        msg = f"Starting K-FAC training with {epochs} epochs, {num_batches} batches/epoch..."
+        print(msg)
+        if history is not None: history.append(msg)
+        
+    start_time = time.time()
+    global_step = 0
+    avg_loss = 0.0
+
+    for epoch in range(1, epochs + 1):
+        rng, perm_rng = jax.random.split(rng)
+        perm = jax.random.permutation(perm_rng, num_points)
+        shuffled_data = jax.tree_util.tree_map(lambda x: x[perm], dataset)
+        
+        epoch_loss = 0.0
+        for i in range(num_batches):
+            start_idx = i * batch_size
+            end_idx = min((i + 1) * batch_size, num_points)
+            batch = jax.tree_util.tree_map(lambda x: x[start_idx:end_idx], shuffled_data)
+            
+            rng, step_rng = jax.random.split(rng)
+            
+            # Step without top-level JIT to allow K-FAC internal control flow
+            params, opt_state, stats = optimizer.step(
+                params, opt_state, step_rng, batch=batch, global_step_int=global_step
+            )
+            
+            epoch_loss += stats['loss']
+            global_step += 1
+            
+        avg_loss = epoch_loss / num_batches
+        if verbose and (epoch % 10 == 0 or epoch == 1):
+            msg = f"Epoch {epoch}: Avg Loss = {avg_loss:.5f}"
+            print(msg)
+            if history is not None: history.append(msg)
+            
+    total_time = time.time() - start_time
+    if verbose:
+        msg = f"K-FAC finished in {total_time:.2f}s. Final Loss: {avg_loss:.5f}"
         print(msg)
         if history is not None: history.append(msg)
         

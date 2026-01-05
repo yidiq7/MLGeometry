@@ -8,10 +8,6 @@ __all__ = ['zerolayer', 'onelayer', 'twolayers', 'threelayers', 'fourlayers',
            'k2_twolayers', 'k2_threelayers','k4_onelayer','k4_twolayers',
            'BihomogeneousNetwork', 'SpectralNetwork']
 
-# Helper activation
-def square_activation(x):
-    return x**2
-
 class SpectralNetwork(nn.Module):
     """
     A network based on the Spectral layer, which normalizes bihomogeneous terms.
@@ -47,7 +43,7 @@ class BihomogeneousNetwork(nn.Module):
         # The list 'layers' contains hidden layer sizes. 
         # The final density reduction to 1 feature is handled after the loop.
         for feat in self.layers:
-            x = bnn.SquareDense(features=feat, activation=square_activation)(x)
+            x = bnn.SquareDense(features=feat)(x)
             
         # Final layer
         x = bnn.SquareDense(features=1, activation=None)(x)
