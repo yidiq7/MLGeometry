@@ -19,7 +19,9 @@ __all__ = [
     'weighted_MAPE_amp_scaled', 
     'weighted_MSPE_amp_scaled',
     'compute_loss',
+    'compute_residual_loss',
     'compute_cy_metric',
+    'compute_global_factor',
     'make_full_dataset_loss_fn'
 ]
 
@@ -112,7 +114,8 @@ def compute_cy_metric(model: Any, params: Any, batch: dict) -> jnp.ndarray:
 def compute_loss(model: Any,
                  params: Any, 
                  batch: dict, 
-                 loss_metric: Callable[[jnp.ndarray, jnp.ndarray, jnp.ndarray], jnp.ndarray]) -> jnp.ndarray:
+                 loss_metric: Callable[[jnp.ndarray, jnp.ndarray, jnp.ndarray], jnp.ndarray],
+                 fixed_factor: Optional[jnp.ndarray] = None) -> jnp.ndarray:
     """
     Computes the loss for a given batch of data (Local Normalization).
     """
@@ -121,12 +124,14 @@ def compute_loss(model: Any,
    
     det_vol = _compute_unnormalized_volumes(model, params, batch) 
     
-    # Normalize (Local Batch Normalization)
-    weights = mass / jnp.sum(mass)
-    factor = jnp.sum(weights * det_vol / omega_omegabar)
-    
-    # Treat normalization factor as constant during backprop
-    factor = jax.lax.stop_gradient(factor)
+    if fixed_factor is None:
+        # Normalize (Local Batch Normalization)
+        weights = mass / jnp.sum(mass)
+        factor = jnp.sum(weights * det_vol / omega_omegabar)
+        # Treat normalization factor as constant during backprop
+        factor = jax.lax.stop_gradient(factor)
+    else:
+        factor = fixed_factor
     
     det_omega = det_vol / factor
     
@@ -138,7 +143,8 @@ def compute_residual_loss(
         params: Any,
         batch: dict,
         residue_amp: config.real_dtype,
-        loss_metric: Callable[[jnp.ndarray, jnp.ndarray, jnp.ndarray], jnp.ndarray]) -> jnp.ndarray:
+        loss_metric: Callable[[jnp.ndarray, jnp.ndarray, jnp.ndarray], jnp.ndarray],
+        fixed_factor: Optional[jnp.ndarray] = None) -> jnp.ndarray:
 
     omega_omegabar = batch['Omega_Omegabar']
     mass = batch['mass']
@@ -150,11 +156,13 @@ def compute_residual_loss(
 
     det_vol = jnp.real(jax.vmap(jnp.linalg.det)(metric))
 
-    # Here we use the factor of the old detg
-    # In principle this should consider detg_diff as well, with proper scaling 
-    weights = mass / jnp.sum(mass)
-    factor = jnp.sum(weights * det_vol / omega_omegabar)
-    factor = jax.lax.stop_gradient(factor)
+    if fixed_factor is None:
+        # Here we use the factor of the old detg
+        weights = mass / jnp.sum(mass)
+        factor = jnp.sum(weights * det_vol / omega_omegabar)
+        factor = jax.lax.stop_gradient(factor)
+    else:
+        factor = fixed_factor
 
     det_omega = det_vol / factor
 
@@ -174,11 +182,74 @@ def _compute_unnormalized_volumes(model, params, batch, metric0=None):
     return jnp.real(jax.vmap(jnp.linalg.det)(metric_restricted))
 
 
+def compute_global_factor(model: Any, 
+                          params: Any, 
+                          dataset: dict, 
+                          batch_size: int = 2048,
+                          residue_amp: Optional[config.real_dtype] = None) -> jnp.ndarray:
+    """
+    Computes the normalization factor over the entire dataset efficiently.
+    Uses a Python loop over batches to avoid closure capture issues with jax.lax.map.
+    """
+    n_points = dataset['points'].shape[0]
+    remainder = n_points % batch_size
+    pad_len = (batch_size - remainder) if remainder > 0 else 0
+    
+    # Calculate number of batches
+    # If pad_len > 0, we have an extra partial batch that needs padding
+    # Logic in previous code: total_len = n_points + pad_len. n_batches = total_len // batch_size.
+    total_len = n_points + pad_len
+    n_batches = total_len // batch_size
+    
+    def pad_array(arr):
+        if pad_len > 0:
+            padding = jnp.zeros((pad_len,) + arr.shape[1:], dtype=arr.dtype)
+            return jnp.concatenate([arr, padding], axis=0)
+        return arr
+
+    dataset_padded = {k: pad_array(jnp.array(v)) for k, v in dataset.items()}
+    dataset_padded['points'] = dataset_padded['points'].astype(config.complex_dtype)
+    if residue_amp is not None and 'cymetric' in dataset_padded:
+         dataset_padded['cymetric'] = dataset_padded['cymetric'].astype(config.complex_dtype)
+    
+    # Pre-shard/reshape data
+    batched_data = {k: v.reshape((n_batches, batch_size) + v.shape[1:]) for k, v in dataset_padded.items()}
+    
+    @jax.jit
+    def batch_vol_fn(p, batch_chunk):
+        metric0 = batch_chunk.get('cymetric') if residue_amp is not None else None
+        return _compute_unnormalized_volumes(model, p, batch_chunk, metric0)
+
+    vols_list = []
+    for i in range(n_batches):
+        # Extract the i-th batch for all keys
+        batch_chunk = jax.tree_util.tree_map(lambda x: x[i], batched_data)
+        vols = batch_vol_fn(params, batch_chunk)
+        vols_list.append(vols)
+        
+    all_vols = jnp.concatenate(vols_list)
+    
+    # Mask out padded values
+    # valid_mask needs to be same length as all_vols
+    valid_mask = jnp.concatenate([jnp.ones(n_points), jnp.zeros(pad_len)])
+    all_vols = all_vols * valid_mask
+    
+    omega_flat = dataset_padded['Omega_Omegabar']
+    mass_flat = dataset_padded['mass'] * valid_mask
+    weights = mass_flat / jnp.sum(mass_flat)
+    
+    safe_omega = omega_flat + (1.0 - valid_mask)
+    factor = jnp.sum(weights * all_vols / safe_omega)
+    
+    return factor
+
+
 def make_full_dataset_loss_fn(model: Any, 
                    dataset: dict, 
                    loss_metric: Callable[[jnp.ndarray, jnp.ndarray, jnp.ndarray], jnp.ndarray],
                    batch_size: Optional[int] = None,
-                   residue_amp: Optional[config.real_dtype] = None) -> Callable:
+                   residue_amp: Optional[config.real_dtype] = None,
+                   fixed_factor: Optional[jnp.ndarray] = None) -> Callable:
     """
     Creates a closure that takes `params` and returns scalar loss.
     Supports memory-efficient gradient accumulation if batch_size is set.
@@ -189,9 +260,9 @@ def make_full_dataset_loss_fn(model: Any,
         # --- Full Batch Mode ---
         def loss_fn(params):
             if residue_amp is None:
-                return compute_loss(model, params, dataset, loss_metric)
+                return compute_loss(model, params, dataset, loss_metric, fixed_factor=fixed_factor)
             else:
-                return compute_residual_loss(model, params, dataset, residue_amp, loss_metric)
+                return compute_residual_loss(model, params, dataset, residue_amp, loss_metric, fixed_factor=fixed_factor)
         return loss_fn
 
     else:
@@ -210,6 +281,7 @@ def make_full_dataset_loss_fn(model: Any,
         dataset_padded = {k: pad_array(jnp.array(v)) for k, v in dataset.items()}
         dataset_padded['points'] = dataset_padded['points'].astype(config.complex_dtype)
         dataset_padded['restriction'] = dataset_padded['restriction'].astype(config.complex_dtype)
+        
         if residue_amp is not None and 'cymetric' in dataset_padded:
              dataset_padded['cymetric'] = dataset_padded['cymetric'].astype(config.complex_dtype)
         
@@ -234,11 +306,13 @@ def make_full_dataset_loss_fn(model: Any,
             total_mass = jnp.sum(mass_flat)
             weights = mass_flat / total_mass
             
-            safe_omega = omega_flat + (1.0 - valid_mask)
-            factor = jnp.sum(weights * all_vols / safe_omega)
-            
-            # Treat normalization factor as constant during backprop
-            factor = jax.lax.stop_gradient(factor)
+            if fixed_factor is None:
+                safe_omega = omega_flat + (1.0 - valid_mask)
+                factor = jnp.sum(weights * all_vols / safe_omega)
+                # Treat normalization factor as constant during backprop
+                factor = jax.lax.stop_gradient(factor)
+            else:
+                factor = fixed_factor
             
             if residue_amp is not None and 'amp_scaled' in loss_metric.__name__:
                 return loss_metric(omega_flat, all_vols / factor, mass_flat, residue_amp)
