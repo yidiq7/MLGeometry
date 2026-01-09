@@ -143,7 +143,7 @@ def train_kfac(model: Any,
                batch_size: int,
                loss_metric: Callable,
                params: Optional[Any] = None,
-               l2_reg: config.real_dtype = 0.0
+               l2_reg: config.real_dtype = 0.0,
                residue_amp: Optional[config.real_dtype] = None,
                seed: int = 42,
                verbose: bool = True,
