@@ -17,6 +17,7 @@ __all__ = [
     'Bihomogeneous_k2',
     'Bihomogeneous_k3',
     'Bihomogeneous_k4',
+    'Dense',
     'SquareDense',
     'WidthOneDense'
 ]
@@ -74,7 +75,7 @@ class Spectral(nn.Module):
         bh_terms = Bihomogeneous(d=self.d)(inputs)
         
         # Avoid division by zero (though z shouldn't be 0 in CP^N)
-        return bh_terms / (norm_sq + 1e-12)
+        return bh_terms / norm_sq 
 
 
 class Bihomogeneous_k2(nn.Module):
@@ -160,6 +161,29 @@ class Bihomogeneous_k4(nn.Module):
         zzbar_flat = zzbar[..., rows4, cols4]
         
         return jnp.concatenate([jnp.real(zzbar_flat), jnp.imag(zzbar_flat)], axis=-1)
+
+
+class Dense(nn.Module):
+    """
+    A standard dense layer implementation that avoids kfac-jax auto-registration.
+    Mimics nn.Dense but won't trigger the DenseBlock logic in K-FAC.
+    """
+    features: int
+    use_bias: bool = True
+    kernel_init: Callable = nn.initializers.lecun_normal()
+    bias_init: Callable = nn.initializers.zeros
+    activation: Optional[Callable] = None
+
+    @nn.compact
+    def __call__(self, inputs: jnp.ndarray) -> jnp.ndarray:
+        kernel = self.param('kernel', self.kernel_init, (inputs.shape[-1], self.features))
+        y = jnp.dot(inputs, kernel)
+        if self.use_bias:
+            bias = self.param('bias', self.bias_init, (self.features,))
+            y = y + bias
+        if self.activation:
+            y = self.activation(y)
+        return y
 
 
 class SquareDense(nn.Module):
