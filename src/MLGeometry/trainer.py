@@ -43,7 +43,6 @@ def train_optax(model: Any,
                 loss_metric: Callable,
                 params: Optional[Any] = None,
                 residue_amp: Optional[config.real_dtype] = None,
-                use_global_factor: bool = False,
                 seed: int = 42,
                 verbose: bool = True,
                 history: Optional[list] = None) -> Tuple[Any, float]:
@@ -58,9 +57,6 @@ def train_optax(model: Any,
         batch_size: Mini-batch size.
         loss_metric: Metric function (e.g. mlg.loss.weighted_MAPE).
         params: Initial model parameters. If None, initialized automatically from dataset shape.
-        residue_amp: Optional scaling factor for residual loss.
-        use_global_factor: If True, computes the normalization factor over the whole dataset 
-                           after each epoch and uses it for the next.
         seed: Random seed for shuffling.
         verbose: Whether to print progress.
         history: Optional list to append log messages to.
@@ -86,14 +82,14 @@ def train_optax(model: Any,
     
     # Define JIT-compiled step function
     @jax.jit
-    def step(current_params, current_opt_state, batch_data, factor=None):
+    def step(current_params, current_opt_state, batch_data):
         if residue_amp is None:
             loss_val, grads = jax.value_and_grad(
-                lambda p: mlg_loss.compute_loss(model, p, batch_data, loss_metric, fixed_factor=factor)
+                lambda p: mlg_loss.compute_loss(model, p, batch_data, loss_metric)
             )(current_params)
         else:
             loss_val, grads = jax.value_and_grad(
-                lambda p: mlg_loss.compute_residual_loss(model, p, batch_data, residue_amp, loss_metric, fixed_factor=factor)
+                lambda p: mlg_loss.compute_residual_loss(model, p, batch_data, residue_amp, loss_metric)
             )(current_params)
              
         updates, new_opt_state = optimizer.update(grads, current_opt_state, current_params)
@@ -107,12 +103,6 @@ def train_optax(model: Any,
     start_time = time.time()
     
     avg_loss = 0.0
-    fixed_factor = None
-    
-    # Initial global factor if requested
-    if use_global_factor:
-        fixed_factor = mlg_loss.compute_global_factor(model, params, dataset, batch_size=batch_size, residue_amp=residue_amp)
-
     for epoch in range(1, epochs + 1):
         rng, perm_rng = jax.random.split(rng)
         perm = jax.random.permutation(perm_rng, num_points)
@@ -128,23 +118,19 @@ def train_optax(model: Any,
             # Slice batch
             batch = jax.tree_util.tree_map(lambda x: x[start_idx:end_idx], shuffled_data)
             
-            params, opt_state, loss_val = step(params, opt_state, batch, fixed_factor)
+            params, opt_state, loss_val = step(params, opt_state, batch)
             epoch_loss += loss_val.item()
             
         avg_loss = epoch_loss / num_batches
         
-        # Update global factor for next epoch
-        if use_global_factor:
-            fixed_factor = mlg_loss.compute_global_factor(model, params, dataset, batch_size=batch_size, residue_amp=residue_amp)
-
         if verbose and (epoch % 10 == 0 or epoch == 1):
-            msg = f"Epoch {epoch}: Avg Loss = {avg_loss:.5e}"
+            msg = f"Epoch {epoch}: Avg Loss = {avg_loss:.5f}"
             print(msg)
             if history is not None: history.append(msg)
             
     total_time = time.time() - start_time
     if verbose:
-        msg = f"Training finished in {total_time:.2f}s. Final Loss: {avg_loss:.5e}"
+        msg = f"Training finished in {total_time:.2f}s. Final Loss: {avg_loss:.5f}"
         print(msg)
         if history is not None: history.append(msg)
         
@@ -158,8 +144,6 @@ def train_kfac(model: Any,
                loss_metric: Callable,
                params: Optional[Any] = None,
                residue_amp: Optional[config.real_dtype] = None,
-               use_global_factor: bool = False,
-               initial_damping: float = 1.0,
                seed: int = 42,
                verbose: bool = True,
                history: Optional[list] = None) -> Tuple[Any, float]:
@@ -174,9 +158,6 @@ def train_kfac(model: Any,
         loss_metric: Metric function.
         params: Initial parameters.
         residue_amp: Optional scaling factor for residual loss.
-        use_global_factor: If True, computes the normalization factor over the whole dataset 
-                           after each epoch and uses it for the next.
-        initial_damping: Initial damping factor for curvature inversion.
         seed: Random seed.
         verbose: Print progress.
         history: Optional list to append log messages.
@@ -195,14 +176,10 @@ def train_kfac(model: Any,
 
     rng = jax.random.PRNGKey(seed)
     
-    # Current factor (can be fixed or None for local computation)
-    current_fixed_factor = [None] 
-
     # Define internal loss function for K-FAC with registration
     def loss_func_kfac(p, batch):
         omega_omegabar = batch['Omega_Omegabar']
         mass = batch['mass']
-        factor = current_fixed_factor[0]
         
         # Determine if we use residual physics
         metric0 = batch.get('cymetric', None) if residue_amp is not None else None
@@ -212,14 +189,13 @@ def train_kfac(model: Any,
         metric = metric1 + metric0 if metric0 is not None else metric1
         det_vol = jnp.real(jax.vmap(jnp.linalg.det)(metric))
         
-        if factor is None:
-            weights = mass / jnp.sum(mass)
-            factor = jnp.sum(weights * det_vol / omega_omegabar)
-            factor = jax.lax.stop_gradient(factor)
-        
+        weights = mass / jnp.sum(mass)
+        factor = jnp.sum(weights * det_vol / omega_omegabar)
+        factor = jax.lax.stop_gradient(factor)
         det_omega = det_vol / factor
         
         # Registration for K-FAC curvature approximation
+        # We register the ratio det_omega/omega_omegabar against 1.0
         ratio = det_omega / omega_omegabar
         target = jnp.ones_like(ratio)
         w_normalized = jnp.sqrt(mass)
@@ -246,7 +222,7 @@ def train_kfac(model: Any,
         use_adaptive_learning_rate=True,
         use_adaptive_momentum=True,
         use_adaptive_damping=True,
-        initial_damping=initial_damping,
+        initial_damping=1.0,
         multi_device=False,
         num_burnin_steps=0
     )
@@ -267,10 +243,6 @@ def train_kfac(model: Any,
     start_time = time.time()
     global_step = 0
     avg_loss = 0.0
-    
-    # Initial global factor if requested
-    if use_global_factor:
-        current_fixed_factor[0] = mlg_loss.compute_global_factor(model, params, dataset, batch_size=batch_size, residue_amp=residue_amp)
 
     for epoch in range(1, epochs + 1):
         rng, perm_rng = jax.random.split(rng)
@@ -294,19 +266,14 @@ def train_kfac(model: Any,
             global_step += 1
             
         avg_loss = epoch_loss / num_batches
-        
-        # Update global factor for next epoch
-        if use_global_factor:
-            current_fixed_factor[0] = mlg_loss.compute_global_factor(model, params, dataset, batch_size=batch_size, residue_amp=residue_amp)
-
         if verbose and (epoch % 10 == 0 or epoch == 1):
-            msg = f"Epoch {epoch}: Avg Loss = {avg_loss:.5e}"
+            msg = f"Epoch {epoch}: Avg Loss = {avg_loss:.5f}"
             print(msg)
             if history is not None: history.append(msg)
             
     total_time = time.time() - start_time
     if verbose:
-        msg = f"K-FAC finished in {total_time:.2f}s. Final Loss: {avg_loss:.5e}"
+        msg = f"K-FAC finished in {total_time:.2f}s. Final Loss: {avg_loss:.5f}"
         print(msg)
         if history is not None: history.append(msg)
         
@@ -369,13 +336,13 @@ def train_lbfgs(model: Any,
         def step(p, s):
             return solver.update(p, s)
             
-        msg = f"Initial Loss: {state.value:.5e}"
+        msg = f"Initial Loss: {state.value:.5f}"
         print(msg)
         if history is not None: history.append(msg)
         
         for i in range(1, max_iter + 1):
             params, state = step(params, state)
-            msg = f"Iteration {i}: Loss = {state.value:.5e}"
+            msg = f"Iteration {i}: Loss = {state.value:.5f}"
             print(msg)
             if history is not None: history.append(msg)
             
@@ -386,7 +353,7 @@ def train_lbfgs(model: Any,
                 break
         
         final_loss = state.value
-        msg = f"L-BFGS finished in {time.time() - start_time:.2f}s. Final Loss: {final_loss:.5e}"
+        msg = f"L-BFGS finished in {time.time() - start_time:.2f}s. Final Loss: {final_loss:.5f}"
         print(msg)
         if history is not None: history.append(msg)
 
