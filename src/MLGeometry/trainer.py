@@ -124,13 +124,13 @@ def train_optax(model: Any,
         avg_loss = epoch_loss / num_batches
         
         if verbose and (epoch % 10 == 0 or epoch == 1):
-            msg = f"Epoch {epoch}: Avg Loss = {avg_loss:.5f}"
+            msg = f"Epoch {epoch}: Avg Loss = {avg_loss:.5e}"
             print(msg)
             if history is not None: history.append(msg)
             
     total_time = time.time() - start_time
     if verbose:
-        msg = f"Training finished in {total_time:.2f}s. Final Loss: {avg_loss:.5f}"
+        msg = f"Training finished in {total_time:.2f}s. Final Loss: {avg_loss:.5e}"
         print(msg)
         if history is not None: history.append(msg)
         
@@ -271,13 +271,13 @@ def train_kfac(model: Any,
             
         avg_loss = epoch_loss / num_batches
         if verbose and (epoch % 10 == 0 or epoch == 1):
-            msg = f"Epoch {epoch}: Avg Loss = {avg_loss:.5f}"
+            msg = f"Epoch {epoch}: Avg Loss = {avg_loss:.5e}"
             print(msg)
             if history is not None: history.append(msg)
             
     total_time = time.time() - start_time
     if verbose:
-        msg = f"K-FAC finished in {total_time:.2f}s. Final Loss: {avg_loss:.5f}"
+        msg = f"K-FAC finished in {total_time:.2f}s. Final Loss: {avg_loss:.5e}"
         print(msg)
         if history is not None: history.append(msg)
         
@@ -340,13 +340,13 @@ def train_lbfgs(model: Any,
         def step(p, s):
             return solver.update(p, s)
             
-        msg = f"Initial Loss: {state.value:.5f}"
+        msg = f"Initial Loss: {state.value:.5e}"
         print(msg)
         if history is not None: history.append(msg)
         
         for i in range(1, max_iter + 1):
             params, state = step(params, state)
-            msg = f"Iteration {i}: Loss = {state.value:.5f}"
+            msg = f"Iteration {i}: Loss = {state.value:.5e}"
             print(msg)
             if history is not None: history.append(msg)
             
@@ -357,7 +357,7 @@ def train_lbfgs(model: Any,
                 break
         
         final_loss = state.value
-        msg = f"L-BFGS finished in {time.time() - start_time:.2f}s. Final Loss: {final_loss:.5f}"
+        msg = f"L-BFGS finished in {time.time() - start_time:.2f}s. Final Loss: {final_loss:.5e}"
         print(msg)
         if history is not None: history.append(msg)
 
