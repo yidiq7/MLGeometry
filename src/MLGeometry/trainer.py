@@ -143,6 +143,7 @@ def train_kfac(model: Any,
                batch_size: int,
                loss_metric: Callable,
                params: Optional[Any] = None,
+               l2_reg: config.real_dtype = 0.0
                residue_amp: Optional[config.real_dtype] = None,
                seed: int = 42,
                verbose: bool = True,
@@ -156,6 +157,7 @@ def train_kfac(model: Any,
         epochs: Number of training epochs.
         batch_size: Mini-batch size.
         loss_metric: Metric function.
+        l2_reg: The L2 regularization term.
         params: Initial parameters.
         residue_amp: Optional scaling factor for residual loss.
         seed: Random seed.
@@ -204,19 +206,21 @@ def train_kfac(model: Any,
             ratio[:, None] * w_normalized[:, None], 
             target[:, None] * w_normalized[:, None]
         )
-        
+
+        l2_reg_term = l2_reg * kfac_jax.utils.inner_product(p, p) / 2.0 
+
         # Compute the actual loss to return
         if residue_amp is not None and 'amp_scaled' in loss_metric.__name__:
-            loss_val = loss_metric(omega_omegabar, det_omega, mass, residue_amp)
+            loss_val = loss_metric(omega_omegabar, det_omega, mass, residue_amp) + l2_reg_term
         else:
-            loss_val = loss_metric(omega_omegabar, det_omega, mass)
+            loss_val = loss_metric(omega_omegabar, det_omega, mass) + l2_reg_term
             
         return loss_val, {}
 
     # Initialize K-FAC Optimizer
     optimizer = kfac_jax.Optimizer(
         value_and_grad_func=jax.value_and_grad(loss_func_kfac, has_aux=True),
-        l2_reg=0.0,
+        l2_reg=l2_reg,
         value_func_has_aux=True,
         value_func_has_rng=False,
         use_adaptive_learning_rate=True,
