@@ -104,7 +104,7 @@ def dataset_on_patch(patch) -> dict:
     fs_vol = np.array(np.real(patch.num_FS_volume_form_jax('identity', k=1)), dtype=config.np_real_dtype)
     
     # Mass reweighting factor
-    mass = y / (fs_vol + 1e-12)
+    mass = y / fs_vol
 
     # 5. Compute Full Restriction Matrix for the Model
     # The model works in embedding coordinates (d_amb).
