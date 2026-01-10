@@ -21,6 +21,7 @@ __all__ = [
     'compute_loss',
     'compute_residual_loss',
     'compute_cy_metric',
+    'compute_cy_metric_batched',
     'make_full_dataset_loss_fn'
 ]
 
@@ -108,6 +109,26 @@ def compute_cy_metric(model: Any, params: Any, batch: dict) -> jnp.ndarray:
     metric_restricted = jnp.matmul(temp, restriction_dag)
     
     return metric_restricted
+
+
+def compute_cy_metric_batched(model: Any, params: Any, dataset: dict, batch_size: int = 1000) -> jnp.ndarray:
+    """
+    Computes the Calabi-Yau metric in batches to avoid OOM on GPU.
+    """
+    n_points = dataset['points'].shape[0]
+    metrics = []
+    
+    # JIT the step function
+    step_fn = jax.jit(lambda b: compute_cy_metric(model, params, b))
+    
+    for i in range(0, n_points, batch_size):
+        end = min(i + batch_size, n_points)
+        # Slice the batch
+        batch = jax.tree_util.tree_map(lambda x: x[i:end], dataset)
+        m = step_fn(batch)
+        metrics.append(m)
+        
+    return jnp.concatenate(metrics, axis=0)
 
 
 def compute_loss(model: Any,
