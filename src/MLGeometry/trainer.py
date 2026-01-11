@@ -286,7 +286,7 @@ def train_kfac(model: Any,
 
 def train_lbfgs(model: Any,
                 dataset: Dict[str, jnp.ndarray],
-                max_iter: int,
+                epochs: int,
                 loss_metric: Callable,
                 params: Optional[Any] = None,
                 batch_size: Optional[int] = None,
@@ -300,7 +300,7 @@ def train_lbfgs(model: Any,
     Args:
         model: Flax model.
         dataset: Data dictionary.
-        max_iter: Maximum L-BFGS iterations.
+        epochs: Maximum L-BFGS iterations.
         loss_metric: Metric function.
         params: Initial parameters. If None, initialized automatically.
         batch_size: If provided, uses gradient accumulation to handle large datasets.
@@ -330,7 +330,7 @@ def train_lbfgs(model: Any,
         print(msg)
         if history is not None: history.append(msg)
 
-    solver = jaxopt.LBFGS(fun=loss_fn, maxiter=max_iter, tol=1e-5)
+    solver = jaxopt.LBFGS(fun=loss_fn, maxiter=epochs, tol=1e-5)
     start_time = time.time()
     
     if verbose:
@@ -344,7 +344,7 @@ def train_lbfgs(model: Any,
         print(msg)
         if history is not None: history.append(msg)
         
-        for i in range(1, max_iter + 1):
+        for i in range(1, epochs + 1):
             params, state = step(params, state)
             msg = f"Iteration {i}: Loss = {state.value:.5e}"
             print(msg)
