@@ -291,6 +291,7 @@ def train_lbfgs(model: Any,
                 params: Optional[Any] = None,
                 batch_size: Optional[int] = None,
                 residue_amp: Optional[config.real_dtype] = None,
+                tolerence: Any = 1e-8,
                 seed: int = 42,
                 verbose: bool = True,
                 history: Optional[list] = None) -> Tuple[Any, float]:
@@ -330,7 +331,7 @@ def train_lbfgs(model: Any,
         print(msg)
         if history is not None: history.append(msg)
 
-    solver = jaxopt.LBFGS(fun=loss_fn, maxiter=epochs, tol=1e-5)
+    solver = jaxopt.LBFGS(fun=loss_fn, maxiter=epochs, tol=tolerence)
     start_time = time.time()
     
     if verbose:
