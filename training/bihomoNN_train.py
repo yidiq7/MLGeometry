@@ -47,6 +47,7 @@ def parse_args():
     parser.add_argument('--save_name', type=str, default='default_model', help='Name for saving the model.')
 
     # Training
+    parser.add_argument('--precision', type=int, default=32, choices=[32, 64], help='Floating point precision (32 or 64 bits).')
     parser.add_argument('--max_epochs', type=int, default=1000, help='Maximum number of epochs for training.')
     parser.add_argument('--loss_func', type=str, default='weighted_MAPE', choices=['weighted_MAPE', 'weighted_MSPE', 'weighted_RMSE', 'max_error', 'max_abs_error', 'MAPE_plus_max_error'], help='Loss function to use.')
     parser.add_argument('--clip_threshold', type=float, default=None, help='Gradient clipping threshold. If None, no clipping.')
@@ -62,6 +63,10 @@ def parse_args():
 def main():
     """Main function to setup and run the training process."""
     args = parse_args()
+
+    # Set global precision before any JAX operations
+    mlg.set_precision(args.precision)
+
     print(f"--- Processing Model: {args.save_name} ---")
 
     # Set random seeds
@@ -208,12 +213,15 @@ def main():
 
     # --- Final Evaluation ---
     print("\n--- Final Evaluation ---")
+    # Evaluation needs no gradients, so it can use a larger batch than training.
+    # batch_size=None means full batch, and must stay None.
+    eval_batch_size = args.batch_size * 10 if args.batch_size is not None else None
     sigma_train = mlg.loss.evaluate_dataset(model, params, train_set, mlg.loss.weighted_MAPE, args.batch_size)
-    sigma_test = mlg.loss.evaluate_dataset(model, params, test_set, mlg.loss.weighted_MAPE, args.batch_size)
+    sigma_test = mlg.loss.evaluate_dataset(model, params, test_set, mlg.loss.weighted_MAPE, eval_batch_size)
     E_train = mlg.loss.evaluate_dataset(model, params, train_set, mlg.loss.weighted_MSPE, args.batch_size)
-    E_test = mlg.loss.evaluate_dataset(model, params, test_set, mlg.loss.weighted_MSPE, args.batch_size)
+    E_test = mlg.loss.evaluate_dataset(model, params, test_set, mlg.loss.weighted_MSPE, eval_batch_size)
     sigma_max_train = mlg.loss.evaluate_dataset(model, params, train_set, mlg.loss.max_error, args.batch_size)
-    sigma_max_test = mlg.loss.evaluate_dataset(model, params, test_set, mlg.loss.max_error, args.batch_size)
+    sigma_max_test = mlg.loss.evaluate_dataset(model, params, test_set, mlg.loss.max_error, eval_batch_size)
 
     # Delta Sigma calculation
     def delta_sigma_square_metric_maker(sigma_val: jnp.ndarray):
@@ -223,7 +231,7 @@ def main():
         return metric_func
 
     delta_sigma_train_sq = mlg.loss.evaluate_dataset(model, params, train_set, delta_sigma_square_metric_maker(sigma_train), args.batch_size)
-    delta_sigma_test_sq = mlg.loss.evaluate_dataset(model, params, test_set, delta_sigma_square_metric_maker(sigma_test), args.batch_size)
+    delta_sigma_test_sq = mlg.loss.evaluate_dataset(model, params, test_set, delta_sigma_square_metric_maker(sigma_test), eval_batch_size)
     delta_sigma_train = math.sqrt(delta_sigma_train_sq.item() / HS_train.n_points)
     delta_sigma_test = math.sqrt(delta_sigma_test_sq.item() / HS_test.n_points)
 
@@ -235,7 +243,7 @@ def main():
         return metric_func
     
     delta_E_train_sq = mlg.loss.evaluate_dataset(model, params, train_set, delta_E_square_metric_maker(E_train), args.batch_size)
-    delta_E_test_sq = mlg.loss.evaluate_dataset(model, params, test_set, delta_E_square_metric_maker(E_test), args.batch_size)
+    delta_E_test_sq = mlg.loss.evaluate_dataset(model, params, test_set, delta_E_square_metric_maker(E_test), eval_batch_size)
     delta_E_train = math.sqrt(delta_E_train_sq.item() / HS_train.n_points)
     delta_E_test = math.sqrt(delta_E_test_sq.item() / HS_test.n_points)
 
@@ -254,6 +262,7 @@ def main():
         f.write(f'n_pairs = {args.n_pairs} \n')
         f.write(f'n_points = {HS_train.n_points} \n')
         f.write(f'batch_size = {args.batch_size} \n')
+        f.write(f'precision = {args.precision} \n')
         f.write(f'function = {args.function} \n')
         f.write(f'psi = {args.psi} \n')
         if args.function == 'f1':
