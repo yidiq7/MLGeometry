@@ -157,7 +157,7 @@ def main():
         params, final_loss = mlg.trainer.train_lbfgs(
             model=model,
             dataset=train_set,
-            max_iter=args.max_epochs,
+            epochs=args.max_epochs,
             loss_metric=loss_metric,
             params=params,
             batch_size=args.batch_size or 2048,

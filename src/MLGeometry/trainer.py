@@ -116,13 +116,13 @@ def train_optax(model: Any,
         avg_loss = epoch_loss / num_batches
         
         if verbose and (epoch % 10 == 0 or epoch == 1):
-            msg = f"Epoch {epoch}: Avg Loss = {avg_loss:.5f}"
+            msg = f"Epoch {epoch}: Avg Loss = {avg_loss:.5e}"
             print(msg)
             if history is not None: history.append(msg)
             
     total_time = time.time() - start_time
     if verbose:
-        msg = f"Training finished in {total_time:.2f}s. Final Loss: {avg_loss:.5f}"
+        msg = f"Training finished in {total_time:.2f}s. Final Loss: {avg_loss:.5e}"
         print(msg)
         if history is not None: history.append(msg)
         
@@ -131,10 +131,11 @@ def train_optax(model: Any,
 
 def train_lbfgs(model: Any,
                 dataset: Dict[str, jnp.ndarray],
-                max_iter: int,
+                epochs: int,
                 loss_metric: Callable,
                 params: Optional[Any] = None,
                 batch_size: Optional[int] = None,
+                tolerence: Any = 1e-8,
                 seed: int = 42,
                 verbose: bool = True,
                 history: Optional[list] = None) -> Tuple[Any, float]:
@@ -144,10 +145,11 @@ def train_lbfgs(model: Any,
     Args:
         model: Flax model.
         dataset: Data dictionary.
-        max_iter: Maximum L-BFGS iterations.
+        epochs: Maximum L-BFGS iterations.
         loss_metric: Metric function.
         params: Initial parameters. If None, initialized automatically.
         batch_size: If provided, uses gradient accumulation to handle large datasets.
+        tolerence: L-BFGS convergence tolerance.
         seed: Random seed for initialization (if params is None).
         verbose: Print status.
         history: Optional list to append log messages to.
@@ -174,7 +176,7 @@ def train_lbfgs(model: Any,
         print(msg)
         if history is not None: history.append(msg)
 
-    solver = jaxopt.LBFGS(fun=loss_fn, maxiter=max_iter, tol=1e-5)
+    solver = jaxopt.LBFGS(fun=loss_fn, maxiter=epochs, tol=tolerence)
     start_time = time.time()
     
     if verbose:
@@ -184,24 +186,24 @@ def train_lbfgs(model: Any,
         def step(p, s):
             return solver.update(p, s)
             
-        msg = f"Initial Loss: {state.value:.5f}"
+        msg = f"Initial Loss: {state.value:.5e}"
         print(msg)
         if history is not None: history.append(msg)
         
-        for i in range(1, max_iter + 1):
+        for i in range(1, epochs + 1):
             params, state = step(params, state)
-            msg = f"Iteration {i}: Loss = {state.value:.5f}"
+            msg = f"Iteration {i}: Loss = {state.value:.5e}"
             print(msg)
             if history is not None: history.append(msg)
             
-            if state.error < 1e-5:
+            if state.error < tolerence:
                 msg = f"Converged at iteration {i}"
                 print(msg)
                 if history is not None: history.append(msg)
                 break
         
         final_loss = state.value
-        msg = f"L-BFGS finished in {time.time() - start_time:.2f}s. Final Loss: {final_loss:.5f}"
+        msg = f"L-BFGS finished in {time.time() - start_time:.2f}s. Final Loss: {final_loss:.5e}"
         print(msg)
         if history is not None: history.append(msg)
 
