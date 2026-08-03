@@ -91,22 +91,22 @@ def compute_loss(model: Any,
     """
     omega_omegabar = batch['Omega_Omegabar']
     mass = batch['mass']
-    
-    # Reuse the metric computation logic
-    metric_restricted = compute_cy_metric(model, params, batch)
-    
-    # Compute determinant (Volume Form)
-    det_vol = jnp.real(jax.vmap(jnp.linalg.det)(metric_restricted))
+   
+    det_vol = _compute_unnormalized_volumes(model, params, batch) 
     
     # Normalize (Local Batch Normalization)
     weights = mass / jnp.sum(mass)
     factor = jnp.sum(weights * det_vol / omega_omegabar)
+    
+    # Treat normalization factor as constant during backprop
+    factor = jax.lax.stop_gradient(factor)
+    
     det_omega = det_vol / factor
     
     return loss_metric(omega_omegabar, det_omega, mass)
 
 
-def _compute_unnormalized_volumes(params, batch, model):
+def _compute_unnormalized_volumes(model, params, batch):
     """
     Computes unnormalized volume determinants. Helper for accumulated gradients.
     """
@@ -155,7 +155,7 @@ def make_full_dataset_loss_fn(model: Any,
         
         @jax.checkpoint
         def scan_step(params, batch_chunk):
-            return _compute_unnormalized_volumes(params, batch_chunk, model)
+            return _compute_unnormalized_volumes(model, params, batch_chunk)
 
         def loss_fn_accumulated(params):
             batched_vols = jax.lax.map(lambda b: scan_step(params, b), batched_data)
@@ -169,6 +169,9 @@ def make_full_dataset_loss_fn(model: Any,
             
             safe_omega = omega_flat + (1.0 - valid_mask)
             factor = jnp.sum(weights * all_vols / safe_omega)
+            
+            # Treat normalization factor as constant during backprop
+            factor = jax.lax.stop_gradient(factor)
             
             return loss_metric(omega_flat, all_vols / factor, mass_flat)
 
