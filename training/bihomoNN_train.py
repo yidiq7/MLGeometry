@@ -17,7 +17,7 @@ import MLGeometry as mlg
 from MLGeometry import bihomoNN as bnn
 # Import model architectures from local models.py
 from models import (
-    zerolayer, onelayer, twolayers, threelayers, fourlayers, fivelayers,
+    Kahler_potential, zerolayer,
     OuterProductNN_k2, OuterProductNN_k3, OuterProductNN_k4,
     k2_twolayers, k2_threelayers, k4_onelayer, k4_twolayers
 )
@@ -123,11 +123,15 @@ def main():
             raise ValueError(f"k4_as_first_layer only supports n_hidden=0 (1layer) or n_hidden=1 (2layers). Got {n_hidden}")
         model = model_cls(n_units)
     else:
-        model_list_general = {0: zerolayer, 1: onelayer, 2: twolayers, 3: threelayers, 4: fourlayers, 5: fivelayers}
-        model_cls = model_list_general.get(n_hidden)
-        if model_cls is None:
-            raise ValueError(f"General layers supports n_hidden from 0 to 5. Got {n_hidden}")
-        model = model_cls(n_units)
+        if n_hidden < 0:
+            raise ValueError(f"--layers must name at least one width. Got {args.layers!r}")
+        elif n_hidden == 0:
+            # WidthOneDense head; no Kahler_potential equivalent.
+            model = zerolayer(n_units)
+        else:
+            # n_units[-1] is the output slot and is always forced to 1, so the
+            # hidden widths are n_units[:n_hidden]. Any depth is supported now.
+            model = Kahler_potential(layers=n_units[:n_hidden], d=len(Z))
 
     # Load pre-trained parameters if specified
     params = None
