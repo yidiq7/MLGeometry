@@ -172,17 +172,21 @@ def make_full_dataset_loss_fn(model: Any,
         n_batches = total_len // batch_size
         
         def pad_array(arr):
+            # The model evaluates padded rows too, so the filler must be a real
+            # point (a zero vector gives log(0) -> NaN). Sliced off below.
             if pad_len > 0:
-                padding = jnp.zeros((pad_len,) + arr.shape[1:], dtype=arr.dtype)
+                padding = jnp.repeat(arr[-1:], pad_len, axis=0)
                 return jnp.concatenate([arr, padding], axis=0)
             return arr
 
         dataset_padded = {k: pad_array(jnp.array(v)) for k, v in dataset.items()}
         dataset_padded['points'] = dataset_padded['points'].astype(config.complex_dtype)
         dataset_padded['restriction'] = dataset_padded['restriction'].astype(config.complex_dtype)
-        
-        valid_mask = jnp.concatenate([jnp.ones(n_points), jnp.zeros(pad_len)])
-        
+
+        # Must match the volume slice below, or the filler row skews the weights.
+        omega_flat = dataset_padded['Omega_Omegabar'][:n_points]
+        mass_flat = dataset_padded['mass'][:n_points]
+
         batched_data = {}
         for k, v in dataset_padded.items():
             batched_data[k] = v.reshape((n_batches, batch_size) + v.shape[1:])
@@ -193,17 +197,14 @@ def make_full_dataset_loss_fn(model: Any,
 
         def loss_fn_accumulated(params):
             batched_vols = jax.lax.map(lambda b: scan_step(params, b), batched_data)
-            all_vols = batched_vols.reshape(-1) * valid_mask
-            
-            omega_flat = dataset_padded['Omega_Omegabar']
-            mass_flat = dataset_padded['mass'] * valid_mask
-            
+            # Padding sits at the tail; n_points is static, so this is jit-safe.
+            all_vols = batched_vols.reshape(-1)[:n_points]
+
             total_mass = jnp.sum(mass_flat)
             weights = mass_flat / total_mass
-            
-            safe_omega = omega_flat + (1.0 - valid_mask)
-            factor = jnp.sum(weights * all_vols / safe_omega)
-            
+
+            factor = jnp.sum(weights * all_vols / omega_flat)
+
             # Treat normalization factor as constant during backprop
             factor = jax.lax.stop_gradient(factor)
             
