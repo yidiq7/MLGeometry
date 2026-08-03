@@ -9,9 +9,11 @@ from . import complex_math
 from . import config
 
 __all__ = [
-    'weighted_MAPE', 
-    'weighted_MSE', 
-    'max_error', 
+    'weighted_MAPE',
+    'weighted_MSPE',
+    'weighted_RMSE',
+    'max_error',
+    'max_abs_error',
     'MAPE_plus_max_error',
     'compute_loss',
     'compute_cy_metric',
@@ -27,15 +29,26 @@ def weighted_MAPE(y_true: jnp.ndarray, y_pred: jnp.ndarray, mass: jnp.ndarray) -
     return jnp.sum(jnp.abs(y_true - y_pred) / y_true * weights)
 
 
-def weighted_MSE(y_true: jnp.ndarray, y_pred: jnp.ndarray, mass: jnp.ndarray) -> jnp.ndarray:
-    """Weighted Mean Squared Error (of the ratio - 1)."""
+def weighted_MSPE(y_true: jnp.ndarray, y_pred: jnp.ndarray, mass: jnp.ndarray) -> jnp.ndarray:
+    """Weighted Mean Squared Percentage Error."""
     weights = mass / jnp.sum(mass)
     return jnp.sum(jnp.square(y_pred / y_true - 1) * weights)
 
 
+def weighted_RMSE(y_true: jnp.ndarray, y_pred: jnp.ndarray, mass: jnp.ndarray) -> jnp.ndarray:
+    """Weighted Root Mean Squared Error."""
+    weights = mass / jnp.sum(mass)
+    return jnp.sqrt(jnp.sum(jnp.square(y_pred - y_true) * weights))
+
+
 def max_error(y_true: jnp.ndarray, y_pred: jnp.ndarray, mass: jnp.ndarray) -> jnp.ndarray:
-    """Maximum relative error."""
+    """Maximum Percentage Error."""
     return jnp.max(jnp.abs(y_true - y_pred) / y_true)
+
+
+def max_abs_error(y_true: jnp.ndarray, y_pred: jnp.ndarray, mass: jnp.ndarray) -> jnp.ndarray:
+    """Maximum Absolute Error."""
+    return jnp.max(jnp.abs(y_true - y_pred))
 
 
 def MAPE_plus_max_error(y_true: jnp.ndarray, y_pred: jnp.ndarray, mass: jnp.ndarray) -> jnp.ndarray:
