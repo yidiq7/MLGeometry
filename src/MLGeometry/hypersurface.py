@@ -6,6 +6,7 @@ import numpy as np
 import sympy as sp
 import jax.numpy as jnp
 import jax
+from . import config
 
 __all__ = ['Hypersurface', 'RealHypersurface', 'diff', 'diff_conjugate']
 
@@ -36,11 +37,11 @@ class Hypersurface():
         if points is None:
             # Generate points if not provided
             points_list = self.solve_points(n_pairs)
-            self.points = np.array(points_list, dtype=np.complex64)
+            self.points = np.array(points_list, dtype=config.np_complex_dtype)
             self.autopatch()
         else:
             # Convert provided points to numpy array
-            self.points = np.array(points, dtype=np.complex64)
+            self.points = np.array(points, dtype=config.np_complex_dtype)
             
         self.n_points = len(self.points)
         self.grad = self.get_grad()
@@ -317,7 +318,7 @@ class Hypersurface():
             
         # Func takes coordinates
         vals = self._omega_omegabar_func(*self.points.T)
-        return jnp.array(vals, dtype=jnp.float32)
+        return jnp.array(vals, dtype=config.real_dtype)
 
     def num_restriction_jax(self):
         """Vectorized restriction matrix"""
@@ -349,7 +350,7 @@ class Hypersurface():
         # Original code did r.append(res.T). So we want (N, cols, rows)
         r_jax = np.swapaxes(r_vals, 1, 2)
         
-        return jnp.array(r_jax, dtype=jnp.complex64)
+        return jnp.array(r_jax, dtype=config.complex_dtype)
 
     def num_FS_volume_form_jax(self, h_matrix, k=-1):
         # Uses JAX for batch computation
@@ -371,11 +372,11 @@ class Hypersurface():
         if isinstance(h_matrix, str):
             if h_matrix == 'identity':
                 dim = self.n_dim if k == 1 else self.n_sections
-                h_matrix = np.identity(dim, dtype=np.complex64)
+                h_matrix = np.identity(dim, dtype=config.np_complex_dtype)
             elif h_matrix == 'FS':
-                h_matrix = self.h_FS.astype(np.complex64)
+                h_matrix = self.h_FS.astype(config.np_complex_dtype)
 
-        h_jax = jnp.array(h_matrix, dtype=jnp.complex64) # (M, M)
+        h_jax = jnp.array(h_matrix, dtype=config.complex_dtype) # (M, M)
 
         if k == 1:
             s_jax = self.s_jax_1

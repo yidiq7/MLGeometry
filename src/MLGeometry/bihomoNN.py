@@ -9,6 +9,7 @@ from typing import Callable, Optional
 import jax
 import jax.numpy as jnp
 from flax import linen as nn
+from . import config
 
 __all__ = [
     'Bihomogeneous',
@@ -149,7 +150,7 @@ class SquareDense(nn.Module):
     
     @nn.compact
     def __call__(self, inputs: jnp.ndarray) -> jnp.ndarray:
-        def abs_normal_init(key, shape, dtype=jnp.float32):
+        def abs_normal_init(key, shape, dtype=config.real_dtype):
             return jnp.abs(jax.random.normal(key, shape, dtype) * 0.05)
         
         kernel = self.param('kernel', abs_normal_init, (inputs.shape[-1], self.features))
@@ -189,7 +190,7 @@ class WidthOneDense(nn.Module):
         # dim = (-1 + sqrt(1 + 8*n_unique)) / 2
         dim = int((-1 + (1 + 8 * n_unique)**0.5) / 2)
         
-        def width_one_init(key, shape, dtype=jnp.float32):
+        def width_one_init(key, shape, dtype=config.real_dtype):
             # We want to select the diagonal elements of the implicit matrix.
             # The input order is [Real(triu_indices), Imag(triu_indices)].
             # The diagonal elements are at the start of triu_indices? 

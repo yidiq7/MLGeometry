@@ -10,6 +10,7 @@ import optax
 import jaxopt
 import numpy as np
 from . import loss as mlg_loss
+from . import config
 
 __all__ = ['train_optax', 'train_lbfgs', 'init_params']
 
@@ -28,7 +29,7 @@ def init_params(model: Any, input_shape: Sequence[int], seed: int = 42) -> Any:
     """
     rng = jax.random.PRNGKey(seed)
     # Add batch dimension (1, ...) for initialization
-    dummy_input = jnp.ones((1,) + tuple(input_shape), dtype=jnp.complex64)
+    dummy_input = jnp.ones((1,) + tuple(input_shape), dtype=config.complex_dtype)
     params = model.init(rng, dummy_input)
     return params
 
