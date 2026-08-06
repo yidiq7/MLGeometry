@@ -2,6 +2,44 @@
 
 ## [Unreleased]
 
+## [2.1.0] - 2026-08-06
+
+### Added
+
+- Support for FP64. Call `mlg.set_precision(64)` before any other operation, or pass
+  `--precision 64` to the training script, to run the whole package in double precision
+- The loss functions `weighted_RMSE` and `max_abs_error`
+- `Kahler_potential`, a model in the training script that takes the hidden layer sizes as
+  a list and therefore supports an arbitrary number of layers
+- `compute_cy_metric_batched`, which computes the metric in batches so that a large
+  dataset does not run out of memory
+- A `tolerence` argument for `train_lbfgs`, which defaults to 1e-8 instead of the
+  previously hard-coded 1e-5
+
+### Changed
+
+- Renamed `weighted_MSE` to `weighted_MSPE`, since it computes the mean squared
+  percentage error rather than the mean squared error
+- Renamed the argument `max_iter` of `train_lbfgs` to `epochs`, to be consistent with the
+  other training functions
+- Fixed a bug that returns NaN whenever the number of points is not divisible by the batch
+  size in the accumulated gradient mode
+- Fixed a bug that stops the L-BFGS training at a tolerance of 1e-5 in the verbose mode,
+  regardless of the tolerance requested
+- Removed the small number added to the denominator of the mass formula, which biases the
+  Monte Carlo weights
+- The normalization factor of the volume form is now held constant during the
+  backpropagation
+- The multiprocessing pool now uses the 'spawn' context, which avoids a deadlock with JAX
+  on Linux. A script that generates points now has to be guarded by
+  `if __name__ == '__main__':`
+- The losses are now printed in the scientific notation
+
+### Removed
+
+- The models `onelayer` to `fivelayers` in the training script, which are superseded by
+  `Kahler_potential`
+
 ## [2.0.0] - 2025-12-31
 
 ### Changed
@@ -67,7 +105,7 @@ Please check the usage of the updated package in the latest version of `Guide.ip
 
 - Multi-batch support for L-BFGS
 
-[Unreleased]: https://github.com/yidiq7/MLGeometry/compare/v2.0.0...HEAD
+[Unreleased]: https://github.com/yidiq7/MLGeometry/compare/v2.1.0...HEAD
 [1.0.1]: https://github.com/yidiq7/MLGeometry/releases/tag/v1.0.1
 [1.0.2]: https://github.com/yidiq7/MLGeometry/releases/tag/v1.0.2
 [1.1.0]: https://github.com/yidiq7/MLGeometry/releases/tag/v1.1.0
@@ -75,3 +113,4 @@ Please check the usage of the updated package in the latest version of `Guide.ip
 [1.2.1]: https://github.com/yidiq7/MLGeometry/releases/tag/v1.2.1
 [1.2.2]: https://github.com/yidiq7/MLGeometry/releases/tag/v1.2.2
 [2.0.0]: https://github.com/yidiq7/MLGeometry/releases/tag/v2.0.0
+[2.1.0]: https://github.com/yidiq7/MLGeometry/releases/tag/v2.1.0
