@@ -2,6 +2,26 @@
 
 ## [Unreleased]
 
+## [2.2.0] - 2026-08-07
+
+### Added
+
+- A GitHub Actions workflow that uploads the package to PyPI when a release is published
+
+### Changed
+
+- `requires-python` is now `>=3.12`, to match JAX
+- Renamed `num_kahler_metric_jax` to `num_FS_metric_jax`, since Fubini-Study is the only
+  metric it can now compute
+
+### Removed
+
+- The unreachable general-`k` code paths, which have raised `AttributeError` since `set_k`
+  was dropped in the switch to JAX. Only the Fubini-Study case remains. Computing the
+  Donaldson ansatz at arbitrary `k` is left to a future efficient JAX implementation
+- The `k` and `h_matrix` arguments, each of which had a single valid value. `num_s_J_jax`,
+  `num_FS_metric_jax` and `num_FS_volume_form_jax` now take no arguments
+
 ## [2.1.0] - 2026-08-06
 
 ### Added

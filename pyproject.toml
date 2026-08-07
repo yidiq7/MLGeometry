@@ -6,8 +6,8 @@ build-backend = "setuptools.build_meta"
 name = "MLGeometry-JAX"
 readme = "README.md"
 description = "Higher dimensional computational geometry using machine learning software (JAX backend)"
-requires-python = ">=3.11"
-version = "2.1.0"
+requires-python = ">=3.12"
+version = "2.2.0"
 dependencies = [
     "jax",
     "flax",
