@@ -232,14 +232,6 @@ class Hypersurface():
         local_coordinates = sp.Matrix(self.affine_coordinates).subs(ignored_val, self.function)
         affine_coordinates = sp.Matrix(self.affine_coordinates)
         
-        # Jacobian of embedding map (locally)
-        # But this logic seems to rely on 'function' being the replacement rule?
-        # Typically self.function is f(z)=0.
-        # subs(ignored_val, self.function) replaces z_i with f(z).
-        # This is only valid if f(z) ~ z_i locally?
-        # Original code used this logic, preserving it for correctness of the method 
-        # (assuming it implements a specific math trick or implicit function thm derivative).
-        
         jac = local_coordinates.jacobian(affine_coordinates)
         restriction = jac.inv()
         restriction.col_del(ignored_coord)

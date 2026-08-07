@@ -215,6 +215,4 @@ def make_full_dataset_loss_fn(model: Any,
 def evaluate_dataset(model: Any, current_params: Any, dataset: dict, metric_func: Callable, batch_size: Optional[int] = None) -> jnp.ndarray:
     loss_fn_wrapped = make_full_dataset_loss_fn(model, dataset, metric_func, batch_size=batch_size)
 
-    # JIT the returned function
-    #jitted_loss_fn = jax.jit(loss_fn_wrapped)
     return loss_fn_wrapped(current_params)

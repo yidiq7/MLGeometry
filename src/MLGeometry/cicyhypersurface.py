@@ -76,14 +76,6 @@ class CICYHypersurface(Hypersurface):
                 res.append(val)
             return res
 
-        # Try to find root
-        # CICY usually codimension k, embedded in CP^N.
-        # Line intersection gives 0-dimensional set of points on the linear slice?
-        # No, ztrio defines a Plane (2D complex).
-        # Intersection of Plane (2D) with CICY (dim N-k) in CP^N?
-        # If N=5, k=2 (CICY 3-fold). Plane is CP^2. Intersection is points?
-        # Yes, standard method finds points.
-        
         try:
             # Initial guess
             t_init = np.random.randn(2).tolist() # Changed from original to be more explicit.
@@ -108,12 +100,6 @@ class CICYHypersurface(Hypersurface):
 
     def get_hol_n_form(self, coord):
         try:
-            # For CICY, we delete columns corresponding to 'coord' (which is a list?)
-            # Wait, parent expects coord to be int.
-            # CICY 'max_grad_coordinate' is likely a list/tuple of indices?
-            # autopatch logic below suggests `max_grad_coord` is `[i, j]`.
-            # grad is (n_funcs, n_affine).
-            # We take determinant of the minor defined by columns `coord`.
             return 1 / self.grad[:, coord].det()
         except:
             logging.exception('Error calculating holomorphic n-form')
@@ -201,17 +187,6 @@ class CICYHypersurface(Hypersurface):
         # Identify variables to be eliminated
         ignored_vars = [np.array(W)[i] for i in ignored_coord]
         
-        # Solve locally? Or just substitute?
-        # "subs({coord: func ...})" implies we are using the defining equations 
-        # to replace the ignored coordinates.
-        # But this requires solving the system, or assuming 'func' is the definition.
-        # In `cicyhypersurface.py`, `self.function` is a list of expressions = 0.
-        # The logic in original code:
-        # local_coordinates = sp.Matrix(W).subs({coord: func for coord, func in zip(ignored_coordinate, self.function)})
-        # This replaces w_i with f_j. This calculates the map from embedding to "function space"?
-        # Actually, it seems to define the local coords as (w_k, f_j) effectively?
-        # And then Jacobians...
-        
         # Preserving original logic:
         # Create map {w_i: f_i} for i in ignored_indices.
         # Note: len(ignored_coord) should equal len(self.function).
@@ -257,14 +232,6 @@ class RealCICYHypersurface(CICYHypersurface, RealHypersurface):
 
     @staticmethod
     def solve_poly(coeff_list, monom_list, ztrio):
-        # Same as CICY solve_poly but returns only if real?
-        # Parent RealHypersurface.solve_poly_real logic was: solve, check imag part < 1e-8.
-        
-        # Here we solve for t.
-        # We need t such that point is real? Or just t is real?
-        # If ztrio is real, and t is real, point is real.
-        # RealCICYHypersurface likely implies real manifold.
-        
         def func_t(t0, t1):
             res = []
             for coeffs, monoms in zip(coeff_list, monom_list):

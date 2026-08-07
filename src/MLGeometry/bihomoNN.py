@@ -173,17 +173,6 @@ class WidthOneDense(nn.Module):
     def __call__(self, inputs: jnp.ndarray) -> jnp.ndarray:
         input_dim = inputs.shape[-1]
         
-        # Calculate original dimension 'dim' before bihomogeneous expansion
-        # inputs is [Real(triu), Imag(triu)]
-        # Length of triu(dim) is dim*(dim+1)/2
-        # input_dim = 2 * (dim*(dim+1)/2) = dim^2 + dim
-        # Solving for dim: dim^2 + dim - input_dim = 0
-        # This derivation is approximate; usually we know dim from context.
-        # However, the initialization logic mimics the identity matrix structure.
-        
-        # Let's reverse engineer dim from the assumption that the input represents
-        # the flattened upper triangle of a Hermitian matrix (real and imag parts).
-        # Number of unique complex elements = input_dim / 2
         n_unique = input_dim // 2
         # n_unique = dim * (dim + 1) / 2
         # dim^2 + dim - 2*n_unique = 0
@@ -191,18 +180,8 @@ class WidthOneDense(nn.Module):
         dim = int((-1 + (1 + 8 * n_unique)**0.5) / 2)
         
         def width_one_init(key, shape, dtype=config.real_dtype):
-            # We want to select the diagonal elements of the implicit matrix.
-            # The input order is [Real(triu_indices), Imag(triu_indices)].
-            # The diagonal elements are at the start of triu_indices? 
-            # No, triu_indices order: (0,0), (0,1), (0,2)... (1,1), (1,2)...
-            # We need to find indices where row == col.
-            
             rows, cols = jnp.triu_indices(dim)
             is_diag = (rows == cols) # Boolean mask of length n_unique
-            
-            # Weight vector structure: [Real_weights, Imag_weights]
-            # Real_weights: 1.0 for diagonal, 0.0 for off-diagonal
-            # Imag_weights: 0.0 everywhere (diagonal of Hermitian is real)
             
             real_w = jnp.where(is_diag, 1.0, 0.0)
             imag_w = jnp.zeros_like(real_w)
