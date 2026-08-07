@@ -11,7 +11,6 @@ import jax
 import jax.numpy as jnp
 from flax import linen as nn
 import optax
-import jaxopt
 
 import MLGeometry as mlg
 from MLGeometry import bihomoNN as bnn

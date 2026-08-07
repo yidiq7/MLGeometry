@@ -7,7 +7,7 @@ import time
 import jax
 import jax.numpy as jnp
 import optax
-import jaxopt
+import optax.tree_utils as otu
 import numpy as np
 from . import loss as mlg_loss
 from . import config
@@ -136,12 +136,14 @@ def train_lbfgs(model: Any,
                 params: Optional[Any] = None,
                 batch_size: Optional[int] = None,
                 tolerence: Any = 1e-8,
+                memory_size: int = 10,
+                max_linesearch_steps: int = 30,
                 seed: int = 42,
                 verbose: bool = True,
                 history: Optional[list] = None) -> Tuple[Any, float]:
     """
     Runs L-BFGS training. Supports memory-efficient gradient accumulation if batch_size is provided.
-    
+
     Args:
         model: Flax model.
         dataset: Data dictionary.
@@ -149,11 +151,18 @@ def train_lbfgs(model: Any,
         loss_metric: Metric function.
         params: Initial parameters. If None, initialized automatically.
         batch_size: If provided, uses gradient accumulation to handle large datasets.
-        tolerence: L-BFGS convergence tolerance.
+        tolerence: Convergence tolerance on the gradient norm.
+        memory_size: Number of past updates L-BFGS keeps to build its inverse
+            Hessian approximation.
+        max_linesearch_steps: Cap on zoom line search trials per iteration. Raising
+            this above the optax default of 20 matters when starting far from the
+            optimum, where it is worth several orders of magnitude on the
+            non-smooth losses such as weighted_MAPE; it makes little difference
+            when fine-tuning a model that Adam has already brought close.
         seed: Random seed for initialization (if params is None).
         verbose: Print status.
         history: Optional list to append log messages to.
-        
+
     Returns:
         (trained_params, final_loss)
     """
@@ -176,40 +185,55 @@ def train_lbfgs(model: Any,
         print(msg)
         if history is not None: history.append(msg)
 
-    solver = jaxopt.LBFGS(fun=loss_fn, maxiter=epochs, tol=tolerence)
+    solver = optax.lbfgs(
+        memory_size=memory_size,
+        linesearch=optax.scale_by_zoom_linesearch(
+            max_linesearch_steps=max_linesearch_steps
+        ),
+    )
+    # Reuses the value and gradient the line search already computed, so each
+    # iteration costs one function evaluation rather than two.
+    value_and_grad = optax.value_and_grad_from_state(loss_fn)
+
+    @jax.jit
+    def step(p, state):
+        value, grad = value_and_grad(p, state=state)
+        updates, new_state = solver.update(
+            grad, state, p, value=value, grad=grad, value_fn=loss_fn
+        )
+        new_params = optax.apply_updates(p, updates)
+        # Both are evaluated at new_params, so they describe the iterate returned.
+        return (new_params, new_state,
+                otu.tree_get(new_state, 'value'),
+                otu.tree_norm(otu.tree_get(new_state, 'grad')))
+
+    state = solver.init(params)
+    final_loss = loss_fn(params)
     start_time = time.time()
-    
+
     if verbose:
-        state = solver.init_state(params)
-        
-        @jax.jit
-        def step(p, s):
-            return solver.update(p, s)
-            
-        msg = f"Initial Loss: {state.value:.5e}"
+        msg = f"Initial Loss: {final_loss:.5e}"
         print(msg)
         if history is not None: history.append(msg)
-        
-        for i in range(1, epochs + 1):
-            params, state = step(params, state)
-            msg = f"Iteration {i}: Loss = {state.value:.5e}"
+
+    for i in range(1, epochs + 1):
+        params, state, final_loss, grad_norm = step(params, state)
+
+        if verbose:
+            msg = f"Iteration {i}: Loss = {final_loss:.5e}"
             print(msg)
             if history is not None: history.append(msg)
-            
-            if state.error < tolerence:
+
+        if grad_norm < tolerence:
+            if verbose:
                 msg = f"Converged at iteration {i}"
                 print(msg)
                 if history is not None: history.append(msg)
-                break
-        
-        final_loss = state.value
+            break
+
+    if verbose:
         msg = f"L-BFGS finished in {time.time() - start_time:.2f}s. Final Loss: {final_loss:.5e}"
         print(msg)
         if history is not None: history.append(msg)
 
-    else:
-        res = solver.run(params)
-        params = res.params
-        final_loss = loss_fn(params)
-        
     return params, final_loss

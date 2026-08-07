@@ -7,10 +7,14 @@
 ### Added
 
 - A GitHub Actions workflow that uploads the package to PyPI when a release is published
+- The arguments `memory_size` and `max_linesearch_steps` for `train_lbfgs`, which expose
+  the two L-BFGS settings worth tuning per problem
 
 ### Changed
 
 - `requires-python` is now `>=3.12`, to match JAX
+- `train_lbfgs` now uses the L-BFGS in `optax` rather than the one in `jaxopt`, which is no
+  longer maintained
 - Renamed `num_kahler_metric_jax` to `num_FS_metric_jax`, since Fubini-Study is the only
   metric it can now compute
 

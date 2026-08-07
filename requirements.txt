@@ -1,7 +1,6 @@
 jax
 flax
 optax
-jaxopt
 sympy
 matplotlib
 mpmath
