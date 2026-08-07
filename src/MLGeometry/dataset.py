@@ -85,8 +85,8 @@ def dataset_on_patch(patch) -> dict:
     to generate sections, restrictions, and volume forms.
     """
     # 1. Initialize numerical quantities
-    # The '1' indicates k=1 (bundle power) for Fubini-Study mass calculation
-    patch.s_jax_1, patch.J_jax_1 = patch.num_s_J_jax(k=1)
+    # The '1' denotes the degree-one sections, which give the Fubini-Study mass weights
+    patch.s_jax_1, patch.J_jax_1 = patch.num_s_J_jax()
     
     # Initialize restriction matrix (needed for FS volume form calculation)
     patch.r_jax = patch.num_restriction_jax()
@@ -99,9 +99,8 @@ def dataset_on_patch(patch) -> dict:
     y = np.array(np.real(patch.num_Omega_Omegabar_jax()), dtype=config.np_real_dtype)
     
     # 4. Compute Mass (Reference Measure)
-    # Fubini-Study volume form for identity metric
-    # This uses patch.r_jax internally
-    fs_vol = np.array(np.real(patch.num_FS_volume_form_jax('identity', k=1)), dtype=config.np_real_dtype)
+    # Fubini-Study volume form, computed from patch.s_jax_1, patch.J_jax_1 and patch.r_jax
+    fs_vol = np.array(np.real(patch.num_FS_volume_form_jax()), dtype=config.np_real_dtype)
     
     # Mass reweighting factor
     mass = y / fs_vol

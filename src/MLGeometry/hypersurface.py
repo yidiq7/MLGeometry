@@ -250,67 +250,19 @@ class Hypersurface():
 
     # Numerical Methods with JAX/Vectorization
 
-    def num_s_J_jax(self, k=-1):
-        """Vectorized computation of sections and Jacobian."""
-        if k == 1:
-            # Simple case for k=1 mass formula
-            s_jax = self.points[:, np.newaxis, :] # (N, 1, n_dim)
-            
-            # Jacobian J for k=1 (projective coordinates)
-            # effectively identity minus the norm coordinate row
-            # shape (n_dim-1, n_dim)
-            J_mat = np.delete(np.identity(self.n_dim), self.norm_coordinate, 0) # (n_dim-1, n_dim)
-            J_jax = np.tile(J_mat, (self.n_points, 1, 1)) # (N, n_dim-1, n_dim)
-            # Note: original code J was (n_dim, n_dim-1) per point? 
-            # Original: J = np.delete(I, norm, 0). (n_dim-1, n_dim).
-            # Then J_vec.append(J).
-            # J_jax = array(J_vec).
-            # But wait, later we do J.conj().T
-            # Let's check consistency with dataset.py
-            
-            # In dataset.py: restriction = jnp.matmul(patch.r_jax, trans_tensor)
-            # patch.num_s_J_jax is used for Kahler metric.
-            
-            return jnp.array(s_jax), jnp.array(J_jax)
-        
-        else:
-            # General k
-            # self.sections is lambdified function returning list/array of sections
-            # evaluate on all points
-            
-            # sections_func returns (n_sections, N) or (N, n_sections)?
-            # lambdify with 'numpy' usually returns shape broadcasted from inputs.
-            # inputs are (N,). So outputs (n_sections, N).
-            
-            s_vals = np.array(self.sections(*self.points.T)).T # (N, n_sections)
-            s_jax = s_vals[:, np.newaxis, :] # (N, 1, n_sections)
-            
-            # Jacobian
-            # self.sections_jacobian is lambdified Matrix (n_sections, n_affine)
-            # returns (n_sections, n_affine, N) usually? Or list of lists of arrays?
-            # SymPy lambdify of Matrix returns array of shape (rows, cols) where elements are arrays if inputs are arrays?
-            # Or (rows, cols, N)?
-            # It usually returns array of object if not careful, or (rows, cols, ...).
-            # We need to check dimensions or reshape.
-            
-            J_raw = self.sections_jacobian(*self.points.T) 
-            # Handle potential inhomogeneous output from lambdify
-            if isinstance(J_raw, (list, tuple)):
-                rows = len(J_raw)
-                cols = len(J_raw[0])
-                flat = [elem for row in J_raw for elem in row]
-                flat_broad = np.broadcast_arrays(*flat)
-                J_vals = np.stack(flat_broad).reshape(rows, cols, -1)
-                J_vals = np.moveaxis(J_vals, -1, 0) # (N, rows, cols)
-            else:
-                J_vals = np.array(J_raw) # (rows, cols, N)
-                J_vals = np.moveaxis(J_vals, -1, 0) # (N, rows, cols)
-            
-            # We need J.T (transpose of matrix, not batch)
-            # So (N, n_affine, n_sections)
-            J_jax = np.swapaxes(J_vals, 1, 2)
-            
-            return jnp.array(s_jax), jnp.array(J_jax)
+    def num_s_J_jax(self):
+        """Vectorized degree-one sections and their Jacobian.
+
+        The sections are the homogeneous coordinates themselves, so the Jacobian
+        with respect to the affine coordinates is the constant projection that
+        drops the row of the normalized coordinate.
+        """
+        s_jax = self.points[:, np.newaxis, :] # (N, 1, n_dim)
+
+        J_mat = np.delete(np.identity(self.n_dim), self.norm_coordinate, 0) # (n_dim-1, n_dim)
+        J_jax = np.tile(J_mat, (self.n_points, 1, 1)) # (N, n_dim-1, n_dim)
+
+        return jnp.array(s_jax), jnp.array(J_jax)
 
     def num_Omega_Omegabar_jax(self):
         """Vectorized Omega Omegabar"""
@@ -353,71 +305,42 @@ class Hypersurface():
         
         return jnp.array(r_jax, dtype=config.complex_dtype)
 
-    def num_FS_volume_form_jax(self, h_matrix, k=-1):
-        # Uses JAX for batch computation
-        kahler_metric = self.num_kahler_metric_jax(h_matrix, k)
-        r_jax = self.r_jax # (N, n_dim-1, n_dim) usually?
-        
-        # r_jax is (N, N_local, N_embed_affine)
-        
-        # H @ G @ H_dag
+    def num_FS_volume_form_jax(self):
+        """Fubini-Study volume form restricted to the hypersurface.
+
+        Requires r_jax to have been set from num_restriction_jax.
+        """
+        FS_metric = self.num_FS_metric_jax()
+        r_jax = self.r_jax # (N, n_manifold, n_affine)
+
         r_dag = jnp.swapaxes(jnp.conj(r_jax), -1, -2)
-        
-        # Ensure matrix multiplication is (N, ..., ...)
-        vol_mat = jnp.matmul(r_jax, jnp.matmul(kahler_metric, r_dag))
-        
+        vol_mat = jnp.matmul(r_jax, jnp.matmul(FS_metric, r_dag))
+
         det_vol = jnp.linalg.det(vol_mat)
         return jnp.real(det_vol)
 
-    def num_kahler_metric_jax(self, h_matrix, k=-1):
-        if isinstance(h_matrix, str):
-            if h_matrix == 'identity':
-                dim = self.n_dim if k == 1 else self.n_sections
-                h_matrix = np.identity(dim, dtype=config.np_complex_dtype)
-            elif h_matrix == 'FS':
-                h_matrix = self.h_FS.astype(config.np_complex_dtype)
+    def num_FS_metric_jax(self):
+        """Pullback of the Fubini-Study metric to the affine coordinates.
 
-        h_jax = jnp.array(h_matrix, dtype=config.complex_dtype) # (M, M)
+        Requires s_jax_1 and J_jax_1 to have been set from num_s_J_jax. Here
+        M = n_dim is the number of degree-one sections and K = n_dim - 1 the
+        number of affine coordinates.
+        """
+        s_jax = self.s_jax_1 # (N, 1, M)
+        J_jax = self.J_jax_1 # (N, K, M)
 
-        if k == 1:
-            s_jax = self.s_jax_1
-            J_jax = self.J_jax_1
-        else:
-            s_jax = self.s_jax
-            J_jax = self.J_jax    
-
-        # s_jax: (N, 1, M)
-        # J_jax: (N, K, M) -- wait.
-        # Check num_s_J_jax for k=1:
-        # J_jax is (N, n_dim, n_dim-1) -> (N, M, K).
-        # Check num_s_J_jax for k!=1:
-        # J_jax is (N, n_affine, n_sections) -> (N, K, M) or (N, M, K)?
-        # J_raw was (n_sec, n_aff). Transposed to (n_aff, n_sec).
-        # So J_jax is (N, n_aff, n_sec). (N, K, M).
-        
-        # Formula: G = A/alpha - B/alpha^2
-        # alpha = s h s^H
+        # G = A/alpha - B/alpha^2, with alpha = s s^H
         s_dag = jnp.swapaxes(jnp.conj(s_jax), -1, -2) # (N, M, 1)
-        alpha = jnp.matmul(s_jax, jnp.matmul(h_jax, s_dag)) # (N, 1, 1)
-        
-        # A = J h J^H  (using h_matrix constant broadcast)
-        # J_jax (N, K, M). h_jax (M, M).
+        alpha = jnp.matmul(s_jax, s_dag) # (N, 1, 1)
+
         J_dag = jnp.swapaxes(jnp.conj(J_jax), -1, -2) # (N, M, K)
-        
-        # h @ J^H -> (N, M, K)
-        h_Jdag = jnp.matmul(h_jax, J_dag) 
-        
-        # J @ h_Jdag -> (N, K, K)
-        A = jnp.matmul(J_jax, h_Jdag)
-        
-        # B = (s h J^H)^H @ (s h J^H)
-        # b = s @ h @ J^H -> (N, 1, K)
-        b = jnp.matmul(s_jax, h_Jdag)
+
+        A = jnp.matmul(J_jax, J_dag) # (N, K, K)
+
+        b = jnp.matmul(s_jax, J_dag) # (N, 1, K)
         b_dag = jnp.swapaxes(jnp.conj(b), -1, -2) # (N, K, 1)
-        
-        # b_dag @ b -> (N, K, K)
-        B = jnp.matmul(b_dag, b)
-        
+        B = jnp.matmul(b_dag, b) # (N, K, K)
+
         G = A / alpha - B / (alpha**2)
         return G
 
