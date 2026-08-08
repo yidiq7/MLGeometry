@@ -2,6 +2,41 @@
 
 ## [Unreleased]
 
+### Added
+
+- `batch_poly_roots`, which solves a whole batch of polynomials through the eigenvalues of
+  their companion matrices
+- `Hypersurface.get_line_coeff`, `select_roots`, `normalize_points`, `refine_points`, and
+  `get_newton_funcs`, which are the stages of the new `solve_points`
+- A `chunk_size` argument for `solve_points`. It bounds the peak memory, which is 1.8 GB at
+  1e7 points against 4.3 GB for one single batch
+
+### Changed
+
+- `solve_points` is now vectorized over the whole batch of lines. It is approximately 170
+  times faster on one core, at 1.7 s for each 1e6 points against 285 s
+- `solve_points` returns points that satisfy `f = 0` to a mean relative residual of
+  7.4e-17, against 8.6e-16 before, and a maximum of 3.0e-16, against 2.8e-13. Two Newton
+  steps in the coordinate of largest gradient give this accuracy. The FP64 limit is one
+  epsilon, or 2.2e-16, so the maximum now sits at that limit
+- `solve_points` returns points whose largest-modulus coordinate is exactly 1. Therefore
+  `autopatch` no longer has to change any point, and a user can supply their own points and
+  get the same treatment
+- `RealHypersurface.solve_points` returns points with an imaginary part of exactly zero
+- `generate_random_projective` returns a numpy array instead of a nested list
+
+### Removed
+
+- `multiprocessing` from the point solver. One core of the vectorized solver is 15 times
+  faster than 8 processes of the old one, and the pool needed the `spawn` context, an
+  `if __name__ == '__main__'` guard in the caller, and a pickle of a lambdified function
+- `mpmath` from the point solver. Its precision could not help, because `sympy` forms the
+  line coefficients in FP64 before `mpmath` runs. A Newton refinement is the only cure
+- `Hypersurface.solve_poly`, `RealHypersurface.solve_poly_real`, and
+  `solve_points_multiprocessing`
+- The `except Exception: pass` in the point solver, which dropped all points of a line
+  without a message and made a silent selection effect
+
 ## [2.2.1] - 2026-08-07
 
 ### Removed
