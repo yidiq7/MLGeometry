@@ -10,6 +10,39 @@
   and `get_newton_funcs`, which are the stages of the new `solve_points`
 - `Hypersurface.max_grad_columns`, which gives the column of largest gradient in each
   point. `refine_points` moves that column, and `autopatch` selects the subpatch from it
+- `batch_system_roots`, which gives all `d1*d2` common roots of two polynomials in two
+  variables, for a whole batch of planes. The Sylvester resultant in one variable is a
+  polynomial of degree `d1*d2` in the other, and samples at the roots of unity turn its
+  recovery into a discrete Fourier transform
+- `CICYHypersurface.get_plane_coeff`, `eval_plane_coeff`, `get_plane_points`,
+  `max_grad_columns`, `refine_points`, and `get_newton_funcs`, which are the stages of the
+  new `solve_points`. A `chunk_size` argument bounds the peak memory
+
+### Fixed
+
+- `CICYHypersurface` returned no points at all. `mpmath.matrix.tolist` gives a nested list,
+  so `t_array` had shape (2, 1), and the list `[t_array[0], t_array[1], 1.0]` was
+  inhomogeneous. numpy raises on that. Version 1.2.2 handled the shape correctly, and the
+  translation to JAX in 2.0.0 broke it. The bare `except` hid the failure
+- `CICYHypersurface` started its root search from a real point. Version 1.2.2 used a
+  complex start for the complex class and a real start for the real class, and the
+  translation to JAX in 2.0.0 copied the real start into both
+- `cicyhypersurface.__all__` named `CICYRealHypersurface`, which does not exist. The class
+  is `RealCICYHypersurface`
+
+### Changed
+
+- `CICYHypersurface.solve_points` returns every one of the `d1*d2` intersections of each
+  plane. It found one root per plane before, from a random start, and a measurement on a
+  (3,3) intersection in CP^5 showed that choice favours some roots up to 101 times and
+  never reaches others. The `mass` weights assume the full intersection, so they were not
+  usable. Each plane now contributes all its roots with equal weight
+- `CICYHypersurface.solve_points` is vectorized and chunked, and it holds no `mpmath` and
+  no `multiprocessing`. It needs 36 s for each 1e6 points of a (3,3) intersection
+- `CICYHypersurface` points satisfy both equations to a mean relative residual of 5.7e-17
+  and a maximum of 2.0e-16, which is the FP64 limit. Two Newton steps on the two
+  coordinates of largest Jacobian minor give this accuracy
+- `RealCICYHypersurface` returns points with an imaginary part of exactly zero
 - A `chunk_size` argument for `solve_points`. It bounds the peak memory, which is 1.8 GB at
   1e7 points against 4.3 GB for one single batch
 
