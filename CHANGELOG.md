@@ -6,8 +6,10 @@
 
 - `batch_poly_roots`, which solves a whole batch of polynomials through the eigenvalues of
   their companion matrices
-- `Hypersurface.get_line_coeff`, `select_roots`, `normalize_points`, `refine_points`, and
-  `get_newton_funcs`, which are the stages of the new `solve_points`
+- `Hypersurface.get_line_coeff`, `get_line_points`, `normalize_points`, `refine_points`,
+  and `get_newton_funcs`, which are the stages of the new `solve_points`
+- `Hypersurface.max_grad_columns`, which gives the column of largest gradient in each
+  point. `refine_points` moves that column, and `autopatch` selects the subpatch from it
 - A `chunk_size` argument for `solve_points`. It bounds the peak memory, which is 1.8 GB at
   1e7 points against 4.3 GB for one single batch
 

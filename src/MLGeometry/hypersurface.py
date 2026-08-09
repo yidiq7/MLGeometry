@@ -60,8 +60,9 @@ class Hypersurface():
 
         Each pair of random points spans a line in CP^N, and that line meets the
         hypersurface in `degree` points, so the result holds degree * n_pairs
-        points. The points come back normalized and refined, so that autopatch
-        does not have to change them.
+        points. The normalization fixes the projective scale, so that f = 0
+        determines exactly one remaining coordinate, and Newton steps solve it
+        to the round-off level.
         """
         if chunk_size is None:
             chunk_size = POINTS_CHUNK_PAIRS
@@ -85,12 +86,8 @@ class Hypersurface():
             coeff = np.stack(np.broadcast_arrays(*coeff), axis=-1)
 
             c_solved = batch_poly_roots(coeff)
-            # Reconstruct the points: z = c*a + b
-            points = (c_solved[:, :, np.newaxis] * a[:, np.newaxis, :]
-                      + b[:, np.newaxis, :])
-
             points, norm_coords = self.normalize_points(
-                self.select_roots(points, c_solved))
+                self.get_line_points(c_solved, a, b))
             chunks.append(self.refine_points(points, norm_coords))
             n_solved += len(zpairs)
 
@@ -117,12 +114,28 @@ class Hypersurface():
             return sp.lambdify([coeff_a, coeff_b], coeff_poly, 'numpy')
         return coeff_poly
 
-    def select_roots(self, points, c_solved):
-        """Flattens the intersections of every line into one list of points.
+    def get_line_points(self, c_solved, a, b):
+        """Points where each line c*a + b meets the hypersurface, as a flat list.
 
-        Each root of the line polynomial gives one point in CP^N.
+        Each of the `degree` roots of the line polynomial gives one point.
         """
+        points = (c_solved[:, :, np.newaxis] * a[:, np.newaxis, :]
+                  + b[:, np.newaxis, :])
         return points.reshape(-1, self.n_dim)
+
+    def max_grad_columns(self, points, norm_coords):
+        """Column of the largest gradient in each point, as an index into points.
+
+        f = 0 determines this coordinate from the others, so refine_points moves
+        it. norm_coords names the normalized column, which is excluded, and it
+        takes one index for every point or one index for all of them.
+        """
+        _, grad_func = self.get_newton_funcs()
+
+        grad = np.abs(self._eval_grad(grad_func, points))
+        grad[np.arange(len(points)), norm_coords] = -1.0
+
+        return np.argmax(grad, axis=1)
 
     def normalize_points(self, points):
         """Scales each point so that its largest-modulus coordinate is one.
@@ -142,18 +155,12 @@ class Hypersurface():
         """Newton steps that solve f = 0 in one coordinate of each point.
 
         The normalized coordinate keeps the exact value one, and f = 0 is one
-        equation, so it determines exactly one other coordinate. That coordinate
-        is the one of largest gradient, which is also the coordinate that
-        autopatch and get_restriction later eliminate. Two steps bring the
-        residual of f down to the round-off level.
+        equation, so it determines exactly one other coordinate. Two steps bring
+        the residual of f down to the round-off level.
         """
         function_func, grad_func = self.get_newton_funcs()
         rows = np.arange(len(points))
-
-        # The normalized coordinate is fixed, so exclude it from the choice
-        grad = np.abs(self._eval_grad(grad_func, points))
-        grad[rows, norm_coords] = -1.0
-        columns = np.argmax(grad, axis=1)
+        columns = self.max_grad_columns(points, norm_coords)
 
         for _ in range(n_steps):
             f_val = np.asarray(function_func(*points.T))
@@ -195,21 +202,15 @@ class Hypersurface():
             return
 
         # Vectorized autopatch for top-level patches
-        norms = np.abs(self.points)
-        max_indices = np.argmax(norms, axis=1)
-        
+        max_indices = np.argmax(np.abs(self.points), axis=1)
+
         for i in range(self.n_dim):
             # Select points belonging to patch i
             mask = (max_indices == i)
             if np.any(mask):
-                points_in_patch = self.points[mask]
-                # Normalize points: divide by z_i
-                # points_in_patch[:, i] is the norm coordinate values
-                norm_factors = points_in_patch[:, i][:, np.newaxis]
-                points_normalized = points_in_patch / norm_factors
-                # The division leaves a rounding error in the normalized
-                # coordinate, whose exact value is one.
-                points_normalized[:, i] = 1.0
+                # Every point here has its largest modulus at i, so this divides
+                # by z_i and makes that coordinate exactly one.
+                points_normalized, _ = self.normalize_points(self.points[mask])
 
                 self.set_patch(points_normalized, norm_coord=i)
 
@@ -218,24 +219,10 @@ class Hypersurface():
             if patch.n_points == 0:
                 continue
                 
-            # Compute gradients for all points in the patch
-            # We need a vectorized gradient function
-            if not hasattr(patch, '_grad_func'):
-                patch._grad_func = sp.lambdify(self.coordinates, patch.grad, 'numpy')
-            
-            # Evaluate gradient: output shape (n_dim_affine, n_points) usually, or list of arrays
-            # patch.points is (N, n_dim)
-            # *patch.points.T unpacks to columns (z0_vec, z1_vec, ...)
-            grads = patch._grad_func(*patch.points.T)
-            # Handle potential list of mixed scalars/arrays in gradient output
-            if isinstance(grads, (list, tuple)):
-                broad_grads = np.broadcast_arrays(*grads)
-                grads = np.stack(broad_grads, axis=0)
-            else:
-                grads = np.stack(grads, axis=0)
-            
-            grad_norms = np.abs(grads) # (n_dim_affine, N)
-            max_grad_indices = np.argmax(grad_norms, axis=0) # (N,)
+            # set_patch indexes the affine coordinates, which are the
+            # coordinates without the normalized one, so drop that column.
+            columns = patch.max_grad_columns(patch.points, patch.norm_coordinate)
+            max_grad_indices = columns - (columns > patch.norm_coordinate)
             
             for i in range(len(patch.affine_coordinates)):
                 mask = (max_grad_indices == i)
@@ -452,14 +439,14 @@ class RealHypersurface(Hypersurface):
         real_part = np.random.normal(0.0, 1.0, (n_set, n_pt_in_a_set, self.n_dim))
         return real_part + 0j
 
-    def select_roots(self, points, c_solved, tol=1e-8):
-        """Flattens the real intersections of every line into one list of points.
+    def get_line_points(self, c_solved, a, b, tol=1e-8):
+        """Points where each line c*a + b meets the hypersurface, in RP^N.
 
         A complex root of the line polynomial gives no point in RP^N, so the
         number of points per line is not fixed. A root that passes the test keeps
-        a small imaginary part, and the real part alone gives the real point.
+        a small imaginary part. a and b are real, so the real part of c*a + b is
+        the point that the real part of c gives.
         """
-        mask = np.abs(c_solved.imag) < tol
-        # a and b are real, so the real part of c*a + b is the point that the
-        # real part of c gives.
-        return points.real[mask] + 0j
+        points = (c_solved[:, :, np.newaxis] * a[:, np.newaxis, :]
+                  + b[:, np.newaxis, :])
+        return points.real[np.abs(c_solved.imag) < tol] + 0j
