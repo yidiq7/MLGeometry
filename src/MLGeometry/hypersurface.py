@@ -162,6 +162,7 @@ class Hypersurface():
         rows = np.arange(len(points))
         columns = self.max_grad_columns(points, norm_coords)
 
+        points = points.copy()
         for _ in range(n_steps):
             f_val = np.asarray(function_func(*points.T))
             grad_val = self._eval_grad(grad_func, points)
@@ -404,17 +405,18 @@ class Hypersurface():
 def batch_poly_roots(coeff):
     """Roots of a batch of polynomials, given coefficients in descending order.
 
-    coeff has shape (n, degree + 1). The roots of each polynomial are the
+    The last axis of coeff holds degree + 1 coefficients, and any number of
+    leading axes index the batch. The roots of each polynomial are the
     eigenvalues of its companion matrix, and numpy solves the whole stack of
     matrices in compiled code.
     """
     degree = coeff.shape[-1] - 1
     # Ascending coefficients of the monic polynomial
-    monic = coeff[:, ::-1] / coeff[:, 0, np.newaxis]
+    monic = coeff[..., ::-1] / coeff[..., 0, np.newaxis]
 
     companion = np.zeros(coeff.shape[:-1] + (degree, degree), dtype=coeff.dtype)
-    companion[:, 1:, :-1] = np.identity(degree - 1)
-    companion[:, :, -1] = -monic[:, :degree]
+    companion[..., 1:, :-1] = np.identity(degree - 1)
+    companion[..., :, -1] = -monic[..., :degree]
 
     return np.linalg.eigvals(companion)
 

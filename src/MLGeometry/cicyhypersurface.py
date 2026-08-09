@@ -7,7 +7,7 @@ import numpy as np
 import sympy as sp
 from .hypersurface import Hypersurface
 from .hypersurface import RealHypersurface
-from . import config
+from .hypersurface import batch_poly_roots
 
 __all__ = ['CICYHypersurface', 'RealCICYHypersurface', 'batch_system_roots']
 
@@ -23,6 +23,7 @@ class CICYHypersurface(Hypersurface):
         # solve_points runs inside the parent constructor, so the cache for the
         # plane coefficients has to exist before that call.
         self._plane_coeff_func = None
+        self._plane_degrees = None
         super().__init__(*args, **kwargs)
 
     def solve_points(self, n_trios, chunk_size=None):
@@ -42,6 +43,8 @@ class CICYHypersurface(Hypersurface):
 
         if self._plane_coeff_func is None:
             self._plane_coeff_func = self.get_plane_coeff(lambdify=True)
+            self._plane_degrees = [sp.Poly(f, *self.coordinates).total_degree()
+                                   for f in self.function]
 
         # Solve one chunk of trios at a time, so that the intermediate arrays
         # stay small even when n_trios is large.
@@ -99,8 +102,7 @@ class CICYHypersurface(Hypersurface):
     def eval_plane_coeff(self, a, b, c):
         """Coefficient grids of every plane in a chunk, one call per equation."""
         grids = []
-        for function, coeff_func in zip(self.function, self._plane_coeff_func):
-            degree = sp.Poly(function, *self.coordinates).total_degree()
+        for degree, coeff_func in zip(self._plane_degrees, self._plane_coeff_func):
             # A coefficient that does not depend on a, b or c comes back as a
             # scalar, so broadcast it.
             flat = coeff_func(list(a.T), list(b.T), list(c.T))
@@ -150,6 +152,7 @@ class CICYHypersurface(Hypersurface):
         function_func, jac_func = self.get_newton_funcs()
         columns = self.max_grad_columns(points, norm_coords)
 
+        points = points.copy()
         for _ in range(n_steps):
             values = np.stack(np.broadcast_arrays(
                 *function_func(*points.T)), axis=1)
@@ -344,7 +347,7 @@ def batch_system_roots(grid_1, grid_2, n_steps=2):
     # det[k] = sum_j g_j w^(j k), so a forward transform returns n_samples * g_j
     coeff = np.fft.fft(det, axis=-1) / n_samples
 
-    t0 = _companion_roots(coeff[:, ::-1])
+    t0 = batch_poly_roots(coeff[:, ::-1])
 
     # f1(t0, .) is univariate in t1. Take its roots and keep the one that also
     # makes f2 vanish.
@@ -354,7 +357,7 @@ def batch_system_roots(grid_1, grid_2, n_steps=2):
                                  (n_planes, degree) + grid_2.shape[1:])
     coeff_t1 = np.einsum('p d m, p d m n -> p d n',
                          t0[..., np.newaxis] ** np.arange(d1 + 1), grid_1_rep)
-    candidates = _companion_roots(coeff_t1[..., ::-1])
+    candidates = batch_poly_roots(coeff_t1[..., ::-1])
 
     t0_wide = np.broadcast_to(t0[..., np.newaxis], candidates.shape)
     grid_2_wide = np.broadcast_to(grid_2[:, np.newaxis, np.newaxis],
@@ -377,18 +380,6 @@ def batch_system_roots(grid_1, grid_2, n_steps=2):
         t1 = t1 - step[..., 1]
 
     return t0, t1
-
-
-def _companion_roots(coeff):
-    """Roots from coefficients in descending order, over the leading axes."""
-    degree = coeff.shape[-1] - 1
-    monic = coeff[..., ::-1] / coeff[..., 0, np.newaxis]
-
-    companion = np.zeros(coeff.shape[:-1] + (degree, degree), dtype=coeff.dtype)
-    companion[..., 1:, :-1] = np.identity(degree - 1)
-    companion[..., :, -1] = -monic[..., :degree]
-
-    return np.linalg.eigvals(companion)
 
 
 def _eval_grid(grid, t0, t1):
