@@ -5,6 +5,10 @@
 ### Changed
 
 - The point generator was improved: the point solver is now much faster and more accurate
+- Fixed a bug introduced in the translation to JAX in 2.0.0, which makes
+  `CICYHypersurface` return no points at all
+- Fixed an older bug that makes `CICYHypersurface` use one intersection of each plane
+  rather than all of them, which makes its `mass` weights wrong
 
 ## [2.2.1] - 2026-08-07
 
