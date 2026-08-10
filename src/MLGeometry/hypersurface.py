@@ -1,14 +1,17 @@
 """Defines a Python class for hypersurfaces"""  
 
-import multiprocessing as mp
-import mpmath
 import numpy as np
 import sympy as sp
 import jax.numpy as jnp
 import jax
 from . import config
 
-__all__ = ['Hypersurface', 'RealHypersurface', 'diff', 'diff_conjugate']
+__all__ = ['Hypersurface', 'RealHypersurface', 'batch_poly_roots',
+           'diff', 'diff_conjugate']
+
+# Number of pairs that solve_points handles at one time. A chunk holds arrays of
+# shape (chunk, degree, degree), so this constant bounds the peak memory.
+POINTS_CHUNK_PAIRS = 20000
 
 class Hypersurface():
     r"""A hypersurface or patch defined both symbolically and numerically."""
@@ -33,7 +36,13 @@ class Hypersurface():
             
         self.max_grad_coordinate = max_grad_coordinate
         self.patches = []
-        
+
+        # Cache for numerical functions
+        self._omega_omegabar_func = None
+        self._restriction_func = None
+        self._line_coeff_func = None
+        self._newton_funcs = None
+
         if points is None:
             # Generate points if not provided
             points_list = self.solve_points(n_pairs)
@@ -45,73 +54,146 @@ class Hypersurface():
             
         self.n_points = len(self.points)
         self.grad = self.get_grad()
-        
-        # Cache for numerical functions
-        self._omega_omegabar_func = None
-        self._restriction_func = None
 
-    def solve_points(self, n_pairs):
-        """Generates random points on the hypersurface with Monte Carlo using multiprocessing.""" 
-        zpairs = self.generate_random_projective(n_pairs, 2)
-        
-        # Prepare polynomial coefficients for the line intersection
+    def solve_points(self, n_pairs, chunk_size=None):
+        """Generates random points on the hypersurface with Monte Carlo.
+
+        Each pair of random points spans a line in CP^N, and that line meets the
+        hypersurface in `degree` points, so the result holds degree * n_pairs
+        points. The normalization fixes the projective scale, so that f = 0
+        determines exactly one remaining coordinate, and Newton steps solve it
+        to the round-off level.
+        """
+        if chunk_size is None:
+            chunk_size = POINTS_CHUNK_PAIRS
+
+        if self._line_coeff_func is None:
+            self._line_coeff_func = self.get_line_coeff(lambdify=True)
+
+        # Solve one chunk of pairs at a time, so that the intermediate arrays
+        # stay small even when n_pairs is large.
+        chunks = []
+        n_solved = 0
+        while n_solved < n_pairs:
+            zpairs = self.generate_random_projective(
+                min(chunk_size, n_pairs - n_solved), 2)
+            a = zpairs[:, 0]
+            b = zpairs[:, 1]
+
+            # One call covers every line in the chunk. A coefficient that does
+            # not depend on a or b comes back as a scalar, so broadcast it.
+            coeff = self._line_coeff_func(list(a.T), list(b.T))
+            coeff = np.stack(np.broadcast_arrays(*coeff), axis=-1)
+
+            c_solved = batch_poly_roots(coeff)
+            points, norm_coords = self.normalize_points(
+                self.get_line_points(c_solved, a, b))
+            chunks.append(self.refine_points(points, norm_coords))
+            n_solved += len(zpairs)
+
+        return np.concatenate(chunks)
+
+    def get_line_coeff(self, lambdify=False):
+        """Coefficients of f(c*a + b) as a polynomial in c, in descending order.
+
+        A pair of points (a, b) spans the line c*a + b in CP^N.
+        """
         coeff_a = [sp.symbols('a'+str(i)) for i in range(self.n_dim)]
         coeff_b = [sp.symbols('b'+str(i)) for i in range(self.n_dim)]
         c = sp.symbols('c')
-        
+
         # Substitute line equation z = c*a + b into f(z) = 0
         line = [c*a + b for (a, b) in zip(coeff_a, coeff_b)]
         function_eval = self.function.subs([(self.coordinates[i], line[i]) for i in range(self.n_dim)])
-        
-        # Get polynomial coefficients w.r.t 'c'
-        poly = sp.Poly(function_eval, c)
-        coeff_poly = poly.coeffs()
-        
-        # Create a fast function to get coefficients given a and b
-        get_coeff = sp.lambdify([coeff_a, coeff_b], coeff_poly, 'numpy')
 
-        # Solve in parallel
-        points = self.solve_points_multiprocessing(zpairs, get_coeff)
+        # all_coeffs keeps a coefficient that is zero, so that every line in a
+        # chunk gives the same number of columns.
+        coeff_poly = sp.Poly(function_eval, c).all_coeffs()
+
+        if lambdify:
+            return sp.lambdify([coeff_a, coeff_b], coeff_poly, 'numpy')
+        return coeff_poly
+
+    def get_line_points(self, c_solved, a, b):
+        """Points where each line c*a + b meets the hypersurface, as a flat list.
+
+        Each of the `degree` roots of the line polynomial gives one point.
+        """
+        points = (c_solved[:, :, np.newaxis] * a[:, np.newaxis, :]
+                  + b[:, np.newaxis, :])
+        return points.reshape(-1, self.n_dim)
+
+    def max_grad_columns(self, points, norm_coords):
+        """Column of the largest gradient in each point, as an index into points.
+
+        f = 0 determines this coordinate from the others, so refine_points moves
+        it. norm_coords names the normalized column, which is excluded, and it
+        takes one index for every point or one index for all of them.
+        """
+        _, grad_func = self.get_newton_funcs()
+
+        grad = np.abs(self._eval_grad(grad_func, points))
+        grad[np.arange(len(points)), norm_coords] = -1.0
+
+        return np.argmax(grad, axis=1)
+
+    def normalize_points(self, points):
+        """Scales each point so that its largest-modulus coordinate is one.
+
+        The division leaves a rounding error in that coordinate, whose exact
+        value is one, so the assignment restores it.
+        """
+        norm_coords = np.argmax(np.abs(points), axis=1)
+        rows = np.arange(len(points))
+
+        points = points / points[rows, norm_coords][:, np.newaxis]
+        points[rows, norm_coords] = 1.0
+
+        return points, norm_coords
+
+    def refine_points(self, points, norm_coords, n_steps=2):
+        """Newton steps that solve f = 0 in one coordinate of each point.
+
+        The normalized coordinate keeps the exact value one, and f = 0 is one
+        equation, so it determines exactly one other coordinate. Two steps bring
+        the residual of f down to the round-off level.
+        """
+        function_func, grad_func = self.get_newton_funcs()
+        rows = np.arange(len(points))
+        columns = self.max_grad_columns(points, norm_coords)
+
+        points = points.copy()
+        for _ in range(n_steps):
+            f_val = np.asarray(function_func(*points.T))
+            grad_val = self._eval_grad(grad_func, points)
+            points[rows, columns] -= f_val / grad_val[rows, columns]
+
         return points
 
-    def solve_points_multiprocessing(self, zpairs, get_coeff):
-        points = []
-        # Use 'spawn' context to avoid JAX/fork deadlock issues
-        with mp.get_context('spawn').Pool() as pool:
-            # Pre-calculate coefficients for all pairs
-            # zpairs is list of [pt1, pt2]. pt1 is list of coords.
-            # get_coeff takes (a_vec, b_vec)
-            coeffs_iter = [get_coeff(zp[0], zp[1]) for zp in zpairs]
-            
-            # Map solver
-            for points_d in pool.starmap(Hypersurface.solve_poly, zip(zpairs, coeffs_iter)):
-                points.extend(points_d)
-        return points
+    def get_newton_funcs(self):
+        """Numerical f and its gradient in every coordinate, for refine_points."""
+        if self._newton_funcs is None:
+            grad = [self.function.diff(coord) for coord in self.coordinates]
+            self._newton_funcs = (
+                sp.lambdify(self.coordinates, self.function, 'numpy'),
+                sp.lambdify(self.coordinates, grad, 'numpy'))
+        return self._newton_funcs
+
+    @staticmethod
+    def _eval_grad(grad_func, points):
+        """Gradient of f at every point, as an array of shape (N, n_dim).
+
+        A component of the gradient that is constant comes back as a scalar.
+        """
+        return np.stack(np.broadcast_arrays(*grad_func(*points.T)), axis=1)
 
     def generate_random_projective(self, n_set, n_pt_in_a_set):
         """Generate sets of points in CP^N"""
-        # Optimized generation
         # Shape: (n_set, n_pt_in_a_set, n_dim) complex
         real_part = np.random.normal(0.0, 1.0, (n_set, n_pt_in_a_set, self.n_dim))
         imag_part = np.random.normal(0.0, 1.0, (n_set, n_pt_in_a_set, self.n_dim))
-        return (real_part + 1j * imag_part).tolist()
+        return real_part + 1j * imag_part
 
-    @staticmethod
-    def solve_poly(zpair, coeff):
-        points_d = []
-        try:
-            # mpmath is used for high precision root finding
-            c_solved = mpmath.polyroots(coeff) 
-            a = np.array(zpair[0])
-            b = np.array(zpair[1])
-            for pram_c in c_solved:
-                # Reconstruct point: z = c*a + b
-                pt = complex(pram_c) * a + b
-                points_d.append(pt.tolist())
-        except Exception:
-            pass
-        return points_d
-    
     def autopatch(self):
         """Assigns points to patches based on the coordinate with largest magnitude."""
         # Removed check for self.n_points to avoid uninitialized attribute access.
@@ -121,19 +203,16 @@ class Hypersurface():
             return
 
         # Vectorized autopatch for top-level patches
-        norms = np.abs(self.points)
-        max_indices = np.argmax(norms, axis=1)
-        
+        max_indices = np.argmax(np.abs(self.points), axis=1)
+
         for i in range(self.n_dim):
             # Select points belonging to patch i
             mask = (max_indices == i)
             if np.any(mask):
-                points_in_patch = self.points[mask]
-                # Normalize points: divide by z_i
-                # points_in_patch[:, i] is the norm coordinate values
-                norm_factors = points_in_patch[:, i][:, np.newaxis]
-                points_normalized = points_in_patch / norm_factors
-                
+                # Every point here has its largest modulus at i, so this divides
+                # by z_i and makes that coordinate exactly one.
+                points_normalized, _ = self.normalize_points(self.points[mask])
+
                 self.set_patch(points_normalized, norm_coord=i)
 
         # Subpatches (based on gradient)
@@ -141,24 +220,10 @@ class Hypersurface():
             if patch.n_points == 0:
                 continue
                 
-            # Compute gradients for all points in the patch
-            # We need a vectorized gradient function
-            if not hasattr(patch, '_grad_func'):
-                patch._grad_func = sp.lambdify(self.coordinates, patch.grad, 'numpy')
-            
-            # Evaluate gradient: output shape (n_dim_affine, n_points) usually, or list of arrays
-            # patch.points is (N, n_dim)
-            # *patch.points.T unpacks to columns (z0_vec, z1_vec, ...)
-            grads = patch._grad_func(*patch.points.T)
-            # Handle potential list of mixed scalars/arrays in gradient output
-            if isinstance(grads, (list, tuple)):
-                broad_grads = np.broadcast_arrays(*grads)
-                grads = np.stack(broad_grads, axis=0)
-            else:
-                grads = np.stack(grads, axis=0)
-            
-            grad_norms = np.abs(grads) # (n_dim_affine, N)
-            max_grad_indices = np.argmax(grad_norms, axis=0) # (N,)
+            # set_patch indexes the affine coordinates, which are the
+            # coordinates without the normalized one, so drop that column.
+            columns = patch.max_grad_columns(patch.points, patch.norm_coordinate)
+            max_grad_indices = columns - (columns > patch.norm_coordinate)
             
             for i in range(len(patch.affine_coordinates)):
                 mask = (max_grad_indices == i)
@@ -337,6 +402,25 @@ class Hypersurface():
         return G
 
 # Helper functions
+def batch_poly_roots(coeff):
+    """Roots of a batch of polynomials, given coefficients in descending order.
+
+    The last axis of coeff holds degree + 1 coefficients, and any number of
+    leading axes index the batch. The roots of each polynomial are the
+    eigenvalues of its companion matrix, and numpy solves the whole stack of
+    matrices in compiled code.
+    """
+    degree = coeff.shape[-1] - 1
+    # Ascending coefficients of the monic polynomial
+    monic = coeff[..., ::-1] / coeff[..., 0, np.newaxis]
+
+    companion = np.zeros(coeff.shape[:-1] + (degree, degree), dtype=coeff.dtype)
+    companion[..., 1:, :-1] = np.identity(degree - 1)
+    companion[..., :, -1] = -monic[..., :degree]
+
+    return np.linalg.eigvals(companion)
+
+
 def diff_conjugate(expr, coordinate):
     coord_bar = sp.symbols('coord_bar')
     expr_diff = expr.subs(sp.conjugate(coordinate), coord_bar).diff(coord_bar)
@@ -355,27 +439,16 @@ class RealHypersurface(Hypersurface):
     def generate_random_projective(self, n_set, n_pt_in_a_set):
         """Generate sets of real points in RP^N (embedded in CP^N)."""
         real_part = np.random.normal(0.0, 1.0, (n_set, n_pt_in_a_set, self.n_dim))
-        return (real_part + 0j).tolist()
+        return real_part + 0j
 
-    def solve_points_multiprocessing(self, zpairs, get_coeff):
-        points = []
-        with mp.get_context('spawn').Pool() as pool:
-            coeffs_iter = [get_coeff(zp[0], zp[1]) for zp in zpairs]
-            for points_d in pool.starmap(RealHypersurface.solve_poly_real, zip(zpairs, coeffs_iter)):
-                points.extend(points_d)
-        return points
+    def get_line_points(self, c_solved, a, b, tol=1e-8):
+        """Points where each line c*a + b meets the hypersurface, in RP^N.
 
-    @staticmethod
-    def solve_poly_real(zpair, coeff):
-        points_d = []
-        try:
-            c_solved = mpmath.polyroots(coeff) 
-            a = np.array(zpair[0])
-            b = np.array(zpair[1])
-            for pram_c in c_solved:
-                if abs(complex(pram_c).imag) < 1e-8:
-                    pt = complex(pram_c) * a + b
-                    points_d.append(pt.tolist())
-        except Exception:
-            pass
-        return points_d
+        A complex root of the line polynomial gives no point in RP^N, so the
+        number of points per line is not fixed. A root that passes the test keeps
+        a small imaginary part. a and b are real, so the real part of c*a + b is
+        the point that the real part of c gives.
+        """
+        points = (c_solved[:, :, np.newaxis] * a[:, np.newaxis, :]
+                  + b[:, np.newaxis, :])
+        return points.real[np.abs(c_solved.imag) < tol] + 0j

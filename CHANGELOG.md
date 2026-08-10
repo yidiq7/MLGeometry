@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Changed
+
+- The point generator was improved: the point solver is now much faster and more accurate
+
 ## [2.2.1] - 2026-08-07
 
 ### Removed
