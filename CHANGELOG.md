@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [2.2.2] - 2026-08-10
+
 ### Changed
 
 - The point generator was improved: the point solver is now much faster and more accurate
@@ -143,7 +145,7 @@ Please check the usage of the updated package in the latest version of `Guide.ip
 
 - Multi-batch support for L-BFGS
 
-[Unreleased]: https://github.com/yidiq7/MLGeometry/compare/v2.1.0...HEAD
+[Unreleased]: https://github.com/yidiq7/MLGeometry/compare/v2.2.2...HEAD
 [1.0.1]: https://github.com/yidiq7/MLGeometry/releases/tag/v1.0.1
 [1.0.2]: https://github.com/yidiq7/MLGeometry/releases/tag/v1.0.2
 [1.1.0]: https://github.com/yidiq7/MLGeometry/releases/tag/v1.1.0
@@ -152,3 +154,6 @@ Please check the usage of the updated package in the latest version of `Guide.ip
 [1.2.2]: https://github.com/yidiq7/MLGeometry/releases/tag/v1.2.2
 [2.0.0]: https://github.com/yidiq7/MLGeometry/releases/tag/v2.0.0
 [2.1.0]: https://github.com/yidiq7/MLGeometry/releases/tag/v2.1.0
+[2.2.0]: https://github.com/yidiq7/MLGeometry/releases/tag/v2.2.0
+[2.2.1]: https://github.com/yidiq7/MLGeometry/releases/tag/v2.2.1
+[2.2.2]: https://github.com/yidiq7/MLGeometry/releases/tag/v2.2.2
