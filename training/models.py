@@ -6,7 +6,7 @@ from typing import Any, Callable, Sequence
 __all__ = ['Kahler_potential', 'zerolayer',
            'OuterProductNN_k2','OuterProductNN_k3','OuterProductNN_k4',
            'k2_twolayers', 'k2_threelayers','k4_onelayer','k4_twolayers',
-           'SpectralNetwork']
+           'SpectralNetwork', 'SpectralSirenNetwork']
 
 # Helper activation
 def square_activation(x):
@@ -56,6 +56,25 @@ class SpectralNetwork(nn.Module):
         x = bnn.Spectral(d=self.d)(inputs)
         for feat in self.layers:
             x = bnn.Dense(features=feat, activation=self.activation)(x)
+        x = bnn.Dense(features=1)(x)
+        return self.amp * jnp.sinh(x)
+
+class SpectralSirenNetwork(nn.Module):
+    """SpectralNetwork with SIREN hidden layers, bnn.SirenDense with the sine activation.
+
+    The first hidden layer has the SIREN initialization of a first layer. The width-1
+    output x of bnn.Dense gives amp * sinh(x).
+    """
+    layers: Sequence[int]
+    amp: Any = 1.0
+    omega_0: float = 30.0
+    d: int = 5
+
+    @nn.compact
+    def __call__(self, inputs: jnp.ndarray) -> jnp.ndarray:
+        x = bnn.Spectral(d=self.d)(inputs)
+        for i, feat in enumerate(self.layers):
+            x = bnn.SirenDense(features=feat, omega_0=self.omega_0, is_first_layer=(i == 0))(x)
         x = bnn.Dense(features=1)(x)
         return self.amp * jnp.sinh(x)
 

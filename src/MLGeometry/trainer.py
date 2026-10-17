@@ -410,7 +410,9 @@ def train_stage_lbfgs(model: Any,
 
     Returns:
         (params with the lowest loss, that loss). A failed line search can make the
-        last iterate worse than an earlier one.
+        last iterate worse than an earlier one. Each parameter keeps its dtype: the
+        L-BFGS state is in config.real_dtype, and each iterate is rounded to the dtype
+        of each parameter, so float32 parameters stay on the float32 grid.
     """
     if params is None:
         input_dim = dataset['points'].shape[-1]
@@ -420,9 +422,20 @@ def train_stage_lbfgs(model: Any,
             if history is not None: history.append(msg)
         params = init_params(model, (input_dim,), seed)
 
+    # The line search of optax needs one dtype for all leaves, so it works on wide copies.
+    param_dtypes = jax.tree_util.tree_map(lambda x: jnp.asarray(x).dtype, params)
+    narrow = any(dt != jnp.dtype(config.real_dtype)
+                 for dt in jax.tree_util.tree_leaves(param_dtypes))
+    params = jax.tree_util.tree_map(lambda x: jnp.asarray(x, dtype=config.real_dtype), params)
+
+    def round_to_param_dtypes(p):
+        return jax.tree_util.tree_map(
+            lambda x, dt: x.astype(dt).astype(config.real_dtype), p, param_dtypes)
+
     loss_fn = mlg_loss.make_stage_loss_fn(
         model, dataset, loss_metric, batch_size=batch_size
     )
+    jit_loss_fn = jax.jit(loss_fn)
 
     if verbose:
         mode = "Accumulated Gradients" if batch_size else "Full Batch"
@@ -446,13 +459,15 @@ def train_stage_lbfgs(model: Any,
             grad, state, p, value=value, grad=grad, value_fn=loss_fn
         )
         new_params = optax.apply_updates(p, updates)
-        # Both are evaluated at new_params, so they describe the iterate returned.
+        if narrow:
+            new_params = round_to_param_dtypes(new_params)
+        # The line search evaluated both at new_params, before any rounding to the parameter dtypes.
         return (new_params, new_state,
                 otu.tree_get(new_state, 'value'),
                 otu.tree_norm(otu.tree_get(new_state, 'grad')))
 
     state = solver.init(params)
-    final_loss = float(jax.jit(loss_fn)(params))
+    final_loss = float(jit_loss_fn(params))
     start_time = time.time()
 
     if verbose:
@@ -466,7 +481,8 @@ def train_stage_lbfgs(model: Any,
 
     for i in range(1, epochs + 1):
         params, state, loss_val, grad_norm = step(params, state)
-        final_loss = float(loss_val)
+        # After a rounding, the value of the line search is not the value at the iterate.
+        final_loss = float(jit_loss_fn(params)) if narrow else float(loss_val)
         if loss_record is not None: loss_record.append(final_loss)
         if final_loss < best_loss:
             best_params, best_loss = params, final_loss
@@ -496,4 +512,5 @@ def train_stage_lbfgs(model: Any,
         print(msg)
         if history is not None: history.append(msg)
 
+    best_params = jax.tree_util.tree_map(lambda x, dt: x.astype(dt), best_params, param_dtypes)
     return best_params, best_loss

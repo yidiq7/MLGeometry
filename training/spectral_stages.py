@@ -11,6 +11,10 @@ so a stage differentiates only its own network.
 Each loss in --lbfgs_losses gives one L-BFGS run from the same Adam result. The first
 one continues the chain to the next stage.
 
+--network siren puts SirenDense hidden layers in place of the tanh layers. With
+--siren_float32, the SirenDense parameters of the stages to fit are float32, as the
+branch FP64 created them. Their initial values are the float64 ones rounded to float32.
+
 Example (from the root folder of the repository):
     PYTHONPATH=src python training/spectral_stages.py --fit data/fit.npz \
         --holdout data/holdout.npz --save_dir runs/spectral --stages 3
@@ -29,7 +33,7 @@ import jax.numpy as jnp
 import optax
 
 import MLGeometry as mlg
-from models import SpectralNetwork, zerolayer
+from models import SpectralNetwork, SpectralSirenNetwork, zerolayer
 
 
 LOSSES = {
@@ -58,6 +62,10 @@ def parse_args():
     parser.add_argument('--load_dir', type=str, default=None,
                         help='The save_dir of an earlier run with the stages before --start_stage.')
     parser.add_argument('--layers', type=str, default='64_64_64', help='Hidden widths, e.g. "64_64_64".')
+    parser.add_argument('--network', type=str, default='tanh', choices=['tanh', 'siren'],
+                        help='Hidden layers of the stages to fit: tanh Dense or SirenDense.')
+    parser.add_argument('--siren_float32', action='store_true',
+                        help='Keep the SirenDense parameters of the stages to fit in float32.')
     parser.add_argument('--seed', type=int, default=42,
                         help='Seed of the initialization and the shuffle of stage 1. Stage j uses seed + j - 1.')
     parser.add_argument('--amp', type=float, default=None,
@@ -69,7 +77,8 @@ def parse_args():
     parser.add_argument('--adam_epochs', type=int, default=2000, help='Maximum number of Adam epochs.')
     parser.add_argument('--adam_patience', type=int, default=50,
                         help='Stop Adam after this number of epochs with no relative decrease of --adam_min_delta.')
-    parser.add_argument('--adam_min_delta', type=float, default=0.01)
+    parser.add_argument('--adam_min_delta', type=float, default=0.01,
+                        help='Relative decrease on the scale of sigma and rms(f). An MSPE loss uses 2 times it.')
     parser.add_argument('--batch_size', type=int, default=1000, help='Mini-batch size of Adam.')
     parser.add_argument('--learning_rate', type=float, default=0.001)
 
@@ -81,7 +90,8 @@ def parse_args():
                         help='Maximum number of L-BFGS iterations. 0 skips L-BFGS.')
     parser.add_argument('--lbfgs_patience', type=int, default=50,
                         help='Stop L-BFGS after this number of iterations with no relative decrease of --lbfgs_min_delta.')
-    parser.add_argument('--lbfgs_min_delta', type=float, default=1e-4)
+    parser.add_argument('--lbfgs_min_delta', type=float, default=1e-4,
+                        help='Relative decrease on the scale of sigma and rms(f). An MSPE loss uses 2 times it.')
     parser.add_argument('--lbfgs_batch_size', type=int, default=1000,
                         help='Batch size of the accumulated gradients of L-BFGS.')
 
@@ -161,6 +171,26 @@ def n_params_of(params) -> int:
     return int(sum(x.size for x in jax.tree_util.tree_leaves(params)))
 
 
+def build_model(network: str, layers, amp: float, d: int):
+    """The correction model of one stage: SpectralNetwork (tanh) or SpectralSirenNetwork."""
+    if network == 'siren':
+        return SpectralSirenNetwork(layers=layers, amp=amp, d=d)
+    return SpectralNetwork(layers=layers, amp=amp, d=d)
+
+
+def siren_to_float32(params):
+    """Casts the parameters of the SirenDense layers to float32, the dtype of the branch FP64."""
+    def cast(path, x):
+        names = [str(getattr(k, 'key', k)) for k in path]
+        return x.astype(jnp.float32) if any(n.startswith('SirenDense') for n in names) else x
+    return jax.tree_util.tree_map_with_path(cast, params)
+
+
+def stop_delta(loss_name: str, delta: float) -> float:
+    """Relative decrease of the stop rule. MSPE is the square of rms(f), so it takes 2 * delta."""
+    return 2.0 * delta if 'MSPE' in loss_name else delta
+
+
 def save_pickle(obj, path: str):
     with open(path, 'wb') as pkl:
         pickle.dump(obj, pkl)
@@ -222,7 +252,7 @@ def main():
     for j in range(1, args.start_stage):
         with open(os.path.join(args.load_dir, f'stage{j}.json')) as fp:
             meta = json.load(fp)
-        model = SpectralNetwork(layers=meta['layers'], amp=meta['amp'], d=d)
+        model = build_model(meta.get('network', 'tanh'), meta['layers'], meta['amp'], d)
         params = load_pickle(os.path.join(args.load_dir, meta['chain_params']))
         metrics = {name: total_metric(model, params, ds, args.eval_batch_size) for name, ds in sets.items()}
         for name, ds in sets.items():
@@ -240,11 +270,17 @@ def main():
         amp = summary['stages'][-1]['eval']['fit']['max_abs_error']
         if j == args.start_stage and args.amp is not None:
             amp = args.amp
-        model = SpectralNetwork(layers=layers, amp=amp, d=d)
-        stage = {'stage': j, 'seed': stage_seed, 'amp': amp, 'layers': layers,
+        model = build_model(args.network, layers, amp, d)
+        stage = {'stage': j, 'seed': stage_seed, 'amp': amp, 'layers': layers, 'network': args.network,
+                 'siren_float32': args.siren_float32,
                  'n_points_fit': fit_info['n_points'], 'n_points_holdout': holdout_info['n_points']}
         summary['stages'].append(stage)
         print(f"\n--- Stage {j}: amp = {amp:.6e}, seed = {stage_seed} ---")
+
+        # The initial parameters come from the stage seed. The float32 option rounds the SirenDense ones.
+        params_init = mlg.trainer.init_params(model, (d,), stage_seed)
+        if args.siren_float32:
+            params_init = siren_to_float32(params_init)
 
         # Adam on mini-batches.
         adam_record, adam_history = [], []
@@ -256,8 +292,9 @@ def main():
             epochs=args.adam_epochs,
             batch_size=args.batch_size,
             loss_metric=functools.partial(LOSSES[args.adam_loss], amp=amp),
+            params=params_init,
             patience=args.adam_patience,
-            min_delta=args.adam_min_delta,
+            min_delta=stop_delta(args.adam_loss, args.adam_min_delta),
             loss_record=adam_record,
             seed=stage_seed,
             verbose=True,
@@ -271,6 +308,7 @@ def main():
                         for name, ds in sets.items()}
         stage['adam'] = {'loss': args.adam_loss, 'epochs': len(adam_record), 'time_s': adam_time,
                          'stopped_early': len(adam_record) < args.adam_epochs,
+                         'min_delta': stop_delta(args.adam_loss, args.adam_min_delta),
                          'final_loss': adam_loss, 'loss_record': adam_record,
                          'eval': evaluate(metrics_adam, sets, f'stage {j}, Adam')}
         print(f"Stage {j}: {stage['n_params']} parameters, dtypes {stage['dtypes_params']}")
@@ -292,7 +330,7 @@ def main():
                 params=params_adam,
                 batch_size=args.lbfgs_batch_size,
                 patience=args.lbfgs_patience,
-                min_delta=args.lbfgs_min_delta,
+                min_delta=stop_delta(loss_name, args.lbfgs_min_delta),
                 loss_record=lbfgs_record,
                 seed=stage_seed,
                 verbose=True,
@@ -306,11 +344,20 @@ def main():
             stage['lbfgs'].append({'loss': loss_name, 'iterations': len(lbfgs_record),
                                    'time_s': lbfgs_time, 'final_loss': lbfgs_loss,
                                    'stopped_early': len(lbfgs_record) < args.lbfgs_epochs,
+                                   'min_delta': stop_delta(loss_name, args.lbfgs_min_delta),
+                                   'dtypes_params': sorted({str(x.dtype) for x in
+                                                            jax.tree_util.tree_leaves(params_lbfgs)}),
                                    'loss_record': lbfgs_record,
                                    'eval': evaluate(metrics_lbfgs, sets, f'stage {j}, L-BFGS {loss_name}')})
             if k == 0:
                 chain_metrics, chain_file = metrics_lbfgs, file_name
             write_summary()
+
+        # The loss curves of the stage: Adam by epoch, and each L-BFGS run by iteration.
+        curves = {'adam_' + args.adam_loss: np.asarray(stage['adam']['loss_record'])}
+        for run in stage['lbfgs']:
+            curves['lbfgs_' + run['loss']] = np.asarray(run['loss_record'])
+        np.savez(os.path.join(args.save_dir, f'stage{j}_curves.npz'), amp=amp, **curves)
 
         # The chain continues with the first L-BFGS result.
         for name, ds in sets.items():
@@ -320,8 +367,8 @@ def main():
         stage['eval'] = stage['lbfgs'][0]['eval'] if stage['lbfgs'] else stage['adam']['eval']
         stage['chain_params'] = chain_file
         with open(os.path.join(args.save_dir, f'stage{j}.json'), 'w') as fp:
-            json.dump({'stage': j, 'layers': layers, 'amp': amp, 'activation': 'tanh',
-                       'chain_params': chain_file}, fp, indent=1)
+            json.dump({'stage': j, 'layers': layers, 'amp': amp, 'network': args.network,
+                       'siren_float32': args.siren_float32, 'chain_params': chain_file}, fp, indent=1)
         write_summary()
 
     print(f"\nRun finished in {time.time() - run_start:.1f}s. Summary: {summary_path}")

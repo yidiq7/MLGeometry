@@ -16,10 +16,11 @@
 - `train_stage_optax` and `train_stage_lbfgs` in `trainer`, the forms of `train_optax` and
   `train_lbfgs` for one stage on top of the stored metric. They can stop when the loss
   does not decrease any more (`patience`, `min_delta`), and they can record the loss of
-  each epoch or iteration (`loss_record`). `train_stage_lbfgs` returns the parameters with the lowest
-  loss
-- The model `SpectralNetwork` in `training/models.py`, the driver
-  `training/spectral_stages.py` that fits the stages one after the other, and
+  each epoch or iteration (`loss_record`). `train_stage_lbfgs` returns the parameters with
+  the lowest loss, and each parameter keeps its dtype: float32 parameters stay on the
+  float32 grid
+- The models `SpectralNetwork` and `SpectralSirenNetwork` in `training/models.py`, the
+  driver `training/spectral_stages.py` that fits the stages one after the other, and
   `training/generate_data.py` that stores a dataset of the Fermat quintic
 
 ## [2.2.2] - 2026-08-10
