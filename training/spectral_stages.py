@@ -60,6 +60,9 @@ def parse_args():
     parser.add_argument('--layers', type=str, default='64_64_64', help='Hidden widths, e.g. "64_64_64".')
     parser.add_argument('--seed', type=int, default=42,
                         help='Seed of the initialization and the shuffle of stage 1. Stage j uses seed + j - 1.')
+    parser.add_argument('--amp', type=float, default=None,
+                        help='amp of the stage --start_stage. Default: max_abs_error of the potential '
+                             'before it on the fit set.')
 
     # Adam
     parser.add_argument('--adam_loss', type=str, default='weighted_MAPE_amp_scaled', choices=list(LOSSES))
@@ -235,6 +238,8 @@ def main():
 
         # amp of this stage: the largest absolute error of the volume form before it, on the fit set.
         amp = summary['stages'][-1]['eval']['fit']['max_abs_error']
+        if j == args.start_stage and args.amp is not None:
+            amp = args.amp
         model = SpectralNetwork(layers=layers, amp=amp, d=d)
         stage = {'stage': j, 'seed': stage_seed, 'amp': amp, 'layers': layers,
                  'n_points_fit': fit_info['n_points'], 'n_points_holdout': holdout_info['n_points']}

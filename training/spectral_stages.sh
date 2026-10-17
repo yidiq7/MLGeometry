@@ -23,11 +23,13 @@ $PYTHON -u training/spectral_stages.py --fit data/quintic_fit_50k.npz \
     --lbfgs_epochs 1000 --lbfgs_patience 50 --lbfgs_min_delta 1e-4
 
 # One stage again on the fit set of 200,000 points, on top of the earlier stages of the chain.
+# The stage keeps the amp and the seed of the chain, so only the fit set changes.
 for stage in 1 2 3; do
+    amp=$($PYTHON -c "import json; print(json.load(open('runs/part1/chain_50k/stage${stage}.json'))['amp'])")
     $PYTHON -u training/spectral_stages.py --fit data/quintic_fit_200k.npz \
         --holdout data/quintic_holdout_50k.npz \
         --save_dir runs/part1/stage${stage}_200k \
         --start_stage $stage --stages $stage --load_dir runs/part1/chain_50k \
-        --layers 64_64_64 --seed 42 \
+        --layers 64_64_64 --seed 42 --amp $amp \
         --lbfgs_losses weighted_MAPE_amp_scaled
 done
