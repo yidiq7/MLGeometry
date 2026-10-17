@@ -15,10 +15,15 @@ __all__ = [
     'max_error',
     'max_abs_error',
     'MAPE_plus_max_error',
+    'weighted_MAPE_amp_scaled',
+    'weighted_MSPE_amp_scaled',
     'compute_loss',
     'compute_cy_metric',
     'compute_cy_metric_batched',
-    'make_full_dataset_loss_fn'
+    'make_full_dataset_loss_fn',
+    'compute_stage_loss',
+    'make_stage_loss_fn',
+    'evaluate_stage_dataset'
 ]
 
 
@@ -59,6 +64,28 @@ def MAPE_plus_max_error(y_true: jnp.ndarray, y_pred: jnp.ndarray, mass: jnp.ndar
 
 def eta_array(y_true: jnp.ndarray, y_pred: jnp.ndarray, mass: jnp.ndarray) -> jnp.ndarray:
     return y_pred / y_true
+
+
+def weighted_MAPE_amp_scaled(y_true: jnp.ndarray, y_pred: jnp.ndarray, mass: jnp.ndarray,
+                             amp: Any) -> jnp.ndarray:
+    """Weighted Mean Absolute Percentage Error divided by the amplitude amp.
+
+    The functions of a stage take a metric with three arguments, so give amp with
+    functools.partial(weighted_MAPE_amp_scaled, amp=amp).
+    """
+    weights = mass / jnp.sum(mass)
+    return jnp.sum(jnp.abs(y_true - y_pred) / y_true * weights) / amp
+
+
+def weighted_MSPE_amp_scaled(y_true: jnp.ndarray, y_pred: jnp.ndarray, mass: jnp.ndarray,
+                             amp: Any) -> jnp.ndarray:
+    """Weighted Mean Squared Percentage Error divided by the square of the amplitude amp.
+
+    The functions of a stage take a metric with three arguments, so give amp with
+    functools.partial(weighted_MSPE_amp_scaled, amp=amp).
+    """
+    weights = mass / jnp.sum(mass)
+    return jnp.sum(jnp.square(y_pred / y_true - 1) * weights) / (amp**2)
 
 
 # --- Core Logic ---
@@ -215,4 +242,138 @@ def make_full_dataset_loss_fn(model: Any,
 def evaluate_dataset(model: Any, current_params: Any, dataset: dict, metric_func: Callable, batch_size: Optional[int] = None) -> jnp.ndarray:
     loss_fn_wrapped = make_full_dataset_loss_fn(model, dataset, metric_func, batch_size=batch_size)
 
+    return loss_fn_wrapped(current_params)
+
+
+# --- Stages ---
+
+def compute_stage_loss(model: Any,
+                       params: Any,
+                       batch: dict,
+                       loss_metric: Callable[[jnp.ndarray, jnp.ndarray, jnp.ndarray], jnp.ndarray]) -> jnp.ndarray:
+    """
+    Computes the loss of one stage on top of the stored metric of the earlier stages.
+
+    The restricted metric is linear in the Kahler potential. So the metric of the full
+    potential is batch['cymetric'] plus the metric of the model. The volume form is
+    normalized over the batch (local normalization), as in compute_loss.
+
+    Args:
+        model: Flax model of the correction potential of this stage.
+        params: Model parameters.
+        batch: Dictionary with 'points', 'Omega_Omegabar', 'mass', 'restriction' and
+            'cymetric', the restricted metric of the earlier stages at each point.
+        loss_metric: Metric function (y_true, y_pred, mass) -> scalar, for example
+            functools.partial(weighted_MAPE_amp_scaled, amp=amp).
+
+    Returns:
+        Scalar loss.
+    """
+    omega_omegabar = batch['Omega_Omegabar']
+    mass = batch['mass']
+
+    det_vol = _compute_stage_volumes(model, params, batch)
+
+    weights = mass / jnp.sum(mass)
+    factor = jnp.sum(weights * det_vol / omega_omegabar)
+
+    # The gradient does not go through the normalization factor.
+    factor = jax.lax.stop_gradient(factor)
+
+    return loss_metric(omega_omegabar, det_vol / factor, mass)
+
+
+def _compute_stage_volumes(model, params, batch):
+    """
+    Computes the unnormalized volume determinants of the stored metric plus the metric of the model.
+    """
+    metric = batch['cymetric'] + compute_cy_metric(model, params, batch)
+    return jnp.real(jax.vmap(jnp.linalg.det)(metric))
+
+
+def make_stage_loss_fn(model: Any,
+                       dataset: dict,
+                       loss_metric: Callable[[jnp.ndarray, jnp.ndarray, jnp.ndarray], jnp.ndarray],
+                       batch_size: Optional[int] = None) -> Callable:
+    """
+    Creates a closure that takes `params` and returns the loss of one stage on the full dataset.
+
+    The volume form is normalized over the full dataset. If batch_size is set, the
+    volumes come in batches of this size under jax.checkpoint, so the memory of the
+    gradient does not grow with the dataset.
+
+    Args:
+        model: Flax model of the correction potential of this stage.
+        dataset: Dictionary with the keys of compute_stage_loss, 'cymetric' included.
+        loss_metric: Metric function (y_true, y_pred, mass) -> scalar.
+        batch_size: Number of points in each batch, or None for one full batch.
+
+    Returns:
+        Function params -> scalar loss.
+    """
+    n_points = dataset['points'].shape[0]
+
+    if batch_size is None:
+        def loss_fn(params):
+            return compute_stage_loss(model, params, dataset, loss_metric)
+        return loss_fn
+
+    remainder = n_points % batch_size
+    pad_len = (batch_size - remainder) if remainder > 0 else 0
+    n_batches = (n_points + pad_len) // batch_size
+
+    def pad_array(arr):
+        # The model evaluates the filler rows too, so they repeat a real point. The loss cuts them off.
+        if pad_len > 0:
+            return jnp.concatenate([arr, jnp.repeat(arr[-1:], pad_len, axis=0)], axis=0)
+        return arr
+
+    # The arrays keep their dtypes, so a dataset of low precision is not hidden by a cast.
+    dataset_padded = {k: pad_array(jnp.asarray(v)) for k, v in dataset.items()}
+
+    omega_flat = dataset_padded['Omega_Omegabar'][:n_points]
+    mass_flat = dataset_padded['mass'][:n_points]
+
+    batched_data = {k: v.reshape((n_batches, batch_size) + v.shape[1:])
+                    for k, v in dataset_padded.items()}
+
+    @jax.checkpoint
+    def batch_volumes(params, batch_chunk):
+        return _compute_stage_volumes(model, params, batch_chunk)
+
+    def loss_fn_accumulated(params):
+        batched_vols = jax.lax.map(lambda b: batch_volumes(params, b), batched_data)
+        # The filler rows are at the tail, and n_points is static, so this slice is jit-safe.
+        all_vols = batched_vols.reshape(-1)[:n_points]
+
+        weights = mass_flat / jnp.sum(mass_flat)
+        factor = jnp.sum(weights * all_vols / omega_flat)
+
+        # The gradient does not go through the normalization factor.
+        factor = jax.lax.stop_gradient(factor)
+
+        return loss_metric(omega_flat, all_vols / factor, mass_flat)
+
+    return loss_fn_accumulated
+
+
+def evaluate_stage_dataset(model: Any,
+                           current_params: Any,
+                           dataset: dict,
+                           metric_func: Callable,
+                           batch_size: Optional[int] = None) -> jnp.ndarray:
+    """
+    Evaluates a metric of the full potential, the stored metric plus the model, on a dataset.
+
+    Args:
+        model: Flax model of the correction potential of this stage.
+        current_params: Model parameters.
+        dataset: Dictionary with the keys of compute_stage_loss, 'cymetric' included.
+        metric_func: Metric function (y_true, y_pred, mass) -> scalar, e.g. weighted_MAPE.
+        batch_size: Number of points in each batch, or None for one full batch.
+
+    Returns:
+        Scalar value of metric_func, with the normalization over the full dataset.
+    """
+    loss_fn_wrapped = make_stage_loss_fn(model, dataset, metric_func, batch_size=batch_size)
     return loss_fn_wrapped(current_params)

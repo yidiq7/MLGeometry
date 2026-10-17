@@ -12,7 +12,8 @@ import numpy as np
 from . import loss as mlg_loss
 from . import config
 
-__all__ = ['train_optax', 'train_lbfgs', 'init_params']
+__all__ = ['train_optax', 'train_lbfgs', 'train_stage_optax', 'train_stage_lbfgs',
+           'init_params']
 
 
 def init_params(model: Any, input_shape: Sequence[int], seed: int = 42) -> Any:
@@ -237,3 +238,262 @@ def train_lbfgs(model: Any,
         if history is not None: history.append(msg)
 
     return params, final_loss
+
+
+# --- Stages ---
+
+class _Plateau:
+    """Counts the steps since the loss last went below (1 - min_delta) times its best value."""
+
+    def __init__(self, patience: Optional[int], min_delta: float):
+        self.patience = patience
+        self.min_delta = min_delta
+        self.best = np.inf
+        self.count = 0
+
+    def update(self, value: float) -> bool:
+        """Records one loss value. Returns True when the count reaches the patience."""
+        if value < self.best * (1.0 - self.min_delta):
+            self.best = value
+            self.count = 0
+        else:
+            self.count += 1
+        return self.patience is not None and self.count >= self.patience
+
+
+def train_stage_optax(model: Any,
+                      dataset: Dict[str, jnp.ndarray],
+                      optimizer: optax.GradientTransformation,
+                      epochs: int,
+                      batch_size: int,
+                      loss_metric: Callable,
+                      params: Optional[Any] = None,
+                      patience: Optional[int] = None,
+                      min_delta: float = 0.0,
+                      loss_record: Optional[list] = None,
+                      seed: int = 42,
+                      verbose: bool = True,
+                      history: Optional[list] = None) -> Tuple[Any, float]:
+    """
+    Runs the mini-batch loop of train_optax for one stage on top of the stored metric.
+
+    The loss of each batch is mlg.loss.compute_stage_loss. So the dataset must hold
+    'cymetric', the restricted metric of the earlier stages at each point.
+
+    Args:
+        model: Flax model of the correction potential of this stage.
+        dataset: Dictionary of JAX arrays (points, Omega_Omegabar, mass, restriction, cymetric).
+        optimizer: Optax optimizer instance (e.g. optax.adam(lr)).
+        epochs: Maximum number of epochs.
+        batch_size: Mini-batch size.
+        loss_metric: Metric function (y_true, y_pred, mass) -> scalar.
+        params: Initial model parameters. If None, initialized automatically from dataset shape.
+        patience: If set, stop when the average loss of an epoch has not gone below
+            (1 - min_delta) times its best earlier value for this number of epochs.
+        min_delta: Relative decrease of the loss that resets the patience count.
+        loss_record: Optional list. The average loss of each epoch is appended to it.
+        seed: Random seed for the initialization and the shuffle.
+        verbose: Whether to print progress.
+        history: Optional list to append log messages to.
+
+    Returns:
+        Tuple of (trained_params, final_avg_loss).
+    """
+    if params is None:
+        input_dim = dataset['points'].shape[-1]
+        if verbose:
+            msg = f"Initializing parameters for input dimension {input_dim}..."
+            print(msg)
+            if history is not None: history.append(msg)
+        params = init_params(model, (input_dim,), seed)
+
+    rng = jax.random.PRNGKey(seed)
+    opt_state = optimizer.init(params)
+
+    num_points = dataset['points'].shape[0]
+    num_batches = int(np.ceil(num_points / batch_size))
+
+    @jax.jit
+    def step(current_params, current_opt_state, batch_data):
+        loss_val, grads = jax.value_and_grad(
+            lambda p: mlg_loss.compute_stage_loss(model, p, batch_data, loss_metric)
+        )(current_params)
+        updates, new_opt_state = optimizer.update(grads, current_opt_state, current_params)
+        new_params = optax.apply_updates(current_params, updates)
+        return new_params, new_opt_state, loss_val
+
+    if verbose:
+        msg = f"Starting training with {epochs} epochs, {num_batches} batches/epoch..."
+        print(msg)
+        if history is not None: history.append(msg)
+    start_time = time.time()
+
+    plateau = _Plateau(patience, min_delta)
+    avg_loss = 0.0
+    for epoch in range(1, epochs + 1):
+        rng, perm_rng = jax.random.split(rng)
+        perm = jax.random.permutation(perm_rng, num_points)
+        shuffled_data = jax.tree_util.tree_map(lambda x: x[perm], dataset)
+
+        # The sum stays on the device, so the loop waits for the device once in each epoch.
+        epoch_loss = 0.0
+        for i in range(num_batches):
+            start_idx = i * batch_size
+            end_idx = min((i + 1) * batch_size, num_points)
+            batch = jax.tree_util.tree_map(lambda x: x[start_idx:end_idx], shuffled_data)
+            params, opt_state, loss_val = step(params, opt_state, batch)
+            epoch_loss = epoch_loss + loss_val
+
+        avg_loss = float(epoch_loss) / num_batches
+        if loss_record is not None: loss_record.append(avg_loss)
+
+        if verbose and (epoch % 10 == 0 or epoch == 1):
+            msg = f"Epoch {epoch}: Avg Loss = {avg_loss:.5e}"
+            print(msg)
+            if history is not None: history.append(msg)
+
+        if plateau.update(avg_loss):
+            if verbose:
+                msg = (f"Stopped at epoch {epoch}: no relative decrease of {min_delta:g} "
+                       f"in {patience} epochs. Avg Loss = {avg_loss:.5e}")
+                print(msg)
+                if history is not None: history.append(msg)
+            break
+
+    total_time = time.time() - start_time
+    if verbose:
+        msg = f"Training finished in {total_time:.2f}s. Final Loss: {avg_loss:.5e}"
+        print(msg)
+        if history is not None: history.append(msg)
+
+    return params, avg_loss
+
+
+def train_stage_lbfgs(model: Any,
+                      dataset: Dict[str, jnp.ndarray],
+                      epochs: int,
+                      loss_metric: Callable,
+                      params: Optional[Any] = None,
+                      batch_size: Optional[int] = None,
+                      tolerence: Any = 1e-8,
+                      memory_size: int = 10,
+                      max_linesearch_steps: int = 30,
+                      patience: Optional[int] = None,
+                      min_delta: float = 0.0,
+                      loss_record: Optional[list] = None,
+                      seed: int = 42,
+                      verbose: bool = True,
+                      history: Optional[list] = None) -> Tuple[Any, float]:
+    """
+    Runs the L-BFGS loop of train_lbfgs for one stage on top of the stored metric.
+
+    The loss is mlg.loss.make_stage_loss_fn on the full dataset. So the dataset must
+    hold 'cymetric', the restricted metric of the earlier stages at each point.
+
+    Args:
+        model: Flax model of the correction potential of this stage.
+        dataset: Data dictionary, 'cymetric' included.
+        epochs: Maximum L-BFGS iterations.
+        loss_metric: Metric function (y_true, y_pred, mass) -> scalar.
+        params: Initial parameters. If None, initialized automatically.
+        batch_size: If provided, the gradient is accumulated over batches of this size.
+        tolerence: Convergence tolerance on the gradient norm.
+        memory_size: Number of past updates L-BFGS keeps for its inverse Hessian approximation.
+        max_linesearch_steps: Maximum number of zoom line search trials in each iteration.
+        patience: If set, stop when the loss has not gone below (1 - min_delta) times
+            its best earlier value for this number of iterations.
+        min_delta: Relative decrease of the loss that resets the patience count.
+        loss_record: Optional list. The loss after each iteration is appended to it.
+        seed: Random seed for initialization (if params is None).
+        verbose: Print status.
+        history: Optional list to append log messages to.
+
+    Returns:
+        (params with the lowest loss, that loss). A failed line search can make the
+        last iterate worse than an earlier one.
+    """
+    if params is None:
+        input_dim = dataset['points'].shape[-1]
+        if verbose:
+            msg = f"Initializing parameters for input dimension {input_dim}..."
+            print(msg)
+            if history is not None: history.append(msg)
+        params = init_params(model, (input_dim,), seed)
+
+    loss_fn = mlg_loss.make_stage_loss_fn(
+        model, dataset, loss_metric, batch_size=batch_size
+    )
+
+    if verbose:
+        mode = "Accumulated Gradients" if batch_size else "Full Batch"
+        msg = f"Starting L-BFGS training ({mode})..."
+        print(msg)
+        if history is not None: history.append(msg)
+
+    solver = optax.lbfgs(
+        memory_size=memory_size,
+        linesearch=optax.scale_by_zoom_linesearch(
+            max_linesearch_steps=max_linesearch_steps
+        ),
+    )
+    # The line search computed the value and the gradient already, so each iteration reuses them.
+    value_and_grad = optax.value_and_grad_from_state(loss_fn)
+
+    @jax.jit
+    def step(p, state):
+        value, grad = value_and_grad(p, state=state)
+        updates, new_state = solver.update(
+            grad, state, p, value=value, grad=grad, value_fn=loss_fn
+        )
+        new_params = optax.apply_updates(p, updates)
+        # Both are evaluated at new_params, so they describe the iterate returned.
+        return (new_params, new_state,
+                otu.tree_get(new_state, 'value'),
+                otu.tree_norm(otu.tree_get(new_state, 'grad')))
+
+    state = solver.init(params)
+    final_loss = float(jax.jit(loss_fn)(params))
+    start_time = time.time()
+
+    if verbose:
+        msg = f"Initial Loss: {final_loss:.5e}"
+        print(msg)
+        if history is not None: history.append(msg)
+
+    best_params, best_loss = params, final_loss
+    plateau = _Plateau(patience, min_delta)
+    plateau.update(final_loss)
+
+    for i in range(1, epochs + 1):
+        params, state, loss_val, grad_norm = step(params, state)
+        final_loss = float(loss_val)
+        if loss_record is not None: loss_record.append(final_loss)
+        if final_loss < best_loss:
+            best_params, best_loss = params, final_loss
+
+        if verbose:
+            msg = f"Iteration {i}: Loss = {final_loss:.5e}"
+            print(msg)
+            if history is not None: history.append(msg)
+
+        if grad_norm < tolerence:
+            if verbose:
+                msg = f"Converged at iteration {i}"
+                print(msg)
+                if history is not None: history.append(msg)
+            break
+
+        if plateau.update(final_loss):
+            if verbose:
+                msg = (f"Stopped at iteration {i}: no relative decrease of {min_delta:g} "
+                       f"in {patience} iterations")
+                print(msg)
+                if history is not None: history.append(msg)
+            break
+
+    if verbose:
+        msg = f"L-BFGS finished in {time.time() - start_time:.2f}s. Final Loss: {best_loss:.5e}"
+        print(msg)
+        if history is not None: history.append(msg)
+
+    return best_params, best_loss

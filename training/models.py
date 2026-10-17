@@ -1,11 +1,12 @@
 from flax import linen as nn
 import jax.numpy as jnp
 from MLGeometry import bihomoNN as bnn
-from typing import Any, Sequence
+from typing import Any, Callable, Sequence
 
 __all__ = ['Kahler_potential', 'zerolayer',
            'OuterProductNN_k2','OuterProductNN_k3','OuterProductNN_k4',
-           'k2_twolayers', 'k2_threelayers','k4_onelayer','k4_twolayers']
+           'k2_twolayers', 'k2_threelayers','k4_onelayer','k4_twolayers',
+           'SpectralNetwork']
 
 # Helper activation
 def square_activation(x):
@@ -37,6 +38,26 @@ class Kahler_potential(nn.Module):
         x = bnn.SquareDense(features=1, activation=None)(x)
 
         return self.amp * jnp.log(x)
+
+class SpectralNetwork(nn.Module):
+    """Correction potential of one stage on the spectral features z_i z_j_bar / |z|^2.
+
+    `layers` is the list of hidden widths. Each hidden layer is bnn.Dense with Xavier
+    initialization and the activation. The width-1 output x gives amp * sinh(x), so amp
+    sets the scale of the correction.
+    """
+    layers: Sequence[int]
+    amp: Any = 1.0
+    activation: Callable = jnp.tanh
+    d: int = 5
+
+    @nn.compact
+    def __call__(self, inputs: jnp.ndarray) -> jnp.ndarray:
+        x = bnn.Spectral(d=self.d)(inputs)
+        for feat in self.layers:
+            x = bnn.Dense(features=feat, activation=self.activation)(x)
+        x = bnn.Dense(features=1)(x)
+        return self.amp * jnp.sinh(x)
 
 class zerolayer(nn.Module):
     n_units: Sequence[int] # Not used but for consistency with interface

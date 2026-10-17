@@ -6,6 +6,7 @@ enforcing bihomogeneous properties required for the Kähler potential.
 """
 
 from typing import Callable, Optional
+import math
 import jax
 import jax.numpy as jnp
 from flax import linen as nn
@@ -13,9 +14,12 @@ from . import config
 
 __all__ = [
     'Bihomogeneous',
+    'Spectral',
     'Bihomogeneous_k2',
     'Bihomogeneous_k3',
     'Bihomogeneous_k4',
+    'Dense',
+    'SirenDense',
     'SquareDense',
     'WidthOneDense'
 ]
@@ -53,6 +57,29 @@ class Bihomogeneous(nn.Module):
         # Concatenate Real and Imaginary parts
         # Note: Diagonal elements are real, so imag part is 0, but kept for structural consistency
         return jnp.concatenate([jnp.real(zzbar_flat), jnp.imag(zzbar_flat)], axis=-1)
+
+
+class Spectral(nn.Module):
+    """
+    Bihomogeneous monomials divided by the Fubini-Study weight: z_i * z_j_bar / |z|^2.
+
+    Each output has degree zero, so a network on these features is a function on CP^(d-1).
+    """
+    d: int = 5
+
+    @nn.compact
+    def __call__(self, inputs: jnp.ndarray) -> jnp.ndarray:
+        """
+        Args:
+            inputs: Complex array of shape (..., d).
+
+        Returns:
+            Real array of shape (..., d*(d+1)).
+            Contains [Real(triu), Imag(triu)] / |z|^2.
+        """
+        # z * conj(z) is smooth in the real and imaginary parts, also where a coordinate is zero.
+        norm_sq = jnp.sum(jnp.real(inputs * jnp.conj(inputs)), axis=-1, keepdims=True)
+        return Bihomogeneous(d=self.d)(inputs) / norm_sq
 
 
 class Bihomogeneous_k2(nn.Module):
@@ -138,6 +165,76 @@ class Bihomogeneous_k4(nn.Module):
         zzbar_flat = zzbar[..., rows4, cols4]
         
         return jnp.concatenate([jnp.real(zzbar_flat), jnp.imag(zzbar_flat)], axis=-1)
+
+
+class Dense(nn.Module):
+    """
+    A dense layer with Xavier (Glorot) normal initialization of the kernel.
+
+    It is a separate class from nn.Dense, so that kfac-jax does not register it
+    automatically as a dense block.
+    """
+    features: int
+    use_bias: bool = True
+    kernel_init: Callable = nn.initializers.xavier_normal()
+    bias_init: Callable = nn.initializers.zeros
+    activation: Optional[Callable] = None
+
+    @nn.compact
+    def __call__(self, inputs: jnp.ndarray) -> jnp.ndarray:
+        """
+        Args:
+            inputs: Real array of shape (..., n_in).
+
+        Returns:
+            Real array of shape (..., features).
+        """
+        kernel = self.param('kernel', self.kernel_init,
+                            (inputs.shape[-1], self.features), config.real_dtype)
+        y = jnp.dot(inputs, kernel)
+        if self.use_bias:
+            bias = self.param('bias', self.bias_init, (self.features,), config.real_dtype)
+            y = y + bias
+        if self.activation:
+            y = self.activation(y)
+        return y
+
+
+class SirenDense(nn.Module):
+    """
+    A dense layer with the sine activation and the SIREN initialization.
+
+    Reference: Sitzmann et al., 'Implicit Neural Representations with Periodic
+    Activation Functions' (2020). The output is sin(omega_0 * (x @ W + b)).
+    """
+    features: int
+    omega_0: float = 30.0
+    is_first_layer: bool = False
+
+    @nn.compact
+    def __call__(self, inputs: jnp.ndarray) -> jnp.ndarray:
+        """
+        Args:
+            inputs: Real array of shape (..., n_in).
+
+        Returns:
+            Real array of shape (..., features).
+        """
+        n_input = inputs.shape[-1]
+
+        # First layer: uniform(-1/n, 1/n). Other layers: uniform(-sqrt(6/n)/omega_0, sqrt(6/n)/omega_0).
+        if self.is_first_layer:
+            bound = 1.0 / n_input
+        else:
+            bound = math.sqrt(6.0 / n_input) / self.omega_0
+
+        def siren_uniform_init(key, shape, dtype=config.real_dtype):
+            return jax.random.uniform(key, shape, dtype, minval=-bound, maxval=bound)
+
+        kernel = self.param('kernel', siren_uniform_init, (n_input, self.features))
+        bias = self.param('bias', siren_uniform_init, (self.features,))
+
+        return jnp.sin(self.omega_0 * (jnp.dot(inputs, kernel) + bias))
 
 
 class SquareDense(nn.Module):

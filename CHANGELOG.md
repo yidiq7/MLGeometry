@@ -2,6 +2,26 @@
 
 ## [Unreleased]
 
+### Added
+
+- The layers `Spectral`, `Dense` and `SirenDense` in `bihomoNN`. `Spectral` gives the
+  bihomogeneous monomials divided by the Fubini-Study weight |z|^2. `Dense` is a dense
+  layer with Xavier normal initialization. `SirenDense` is a dense layer with the sine
+  activation and the SIREN initialization
+- The loss functions `weighted_MAPE_amp_scaled` and `weighted_MSPE_amp_scaled`. They divide
+  the MAPE by an amplitude and the MSPE by its square
+- `compute_stage_loss`, `make_stage_loss_fn` and `evaluate_stage_dataset` in `loss`. They
+  add the stored metric of the earlier stages, `dataset['cymetric']`, to the metric of the
+  model of one stage
+- `train_stage_optax` and `train_stage_lbfgs` in `trainer`, the forms of `train_optax` and
+  `train_lbfgs` for one stage on top of the stored metric. They can stop when the loss
+  does not decrease any more (`patience`, `min_delta`), and they can record the loss of
+  each epoch or iteration (`loss_record`). `train_stage_lbfgs` returns the parameters with the lowest
+  loss
+- The model `SpectralNetwork` in `training/models.py`, the driver
+  `training/spectral_stages.py` that fits the stages one after the other, and
+  `training/generate_data.py` that stores a dataset of the Fermat quintic
+
 ## [2.2.2] - 2026-08-10
 
 ### Changed
