@@ -18,10 +18,22 @@
   does not decrease any more (`patience`, `min_delta`), and they can record the loss of
   each epoch or iteration (`loss_record`). `train_stage_lbfgs` returns the parameters with
   the lowest loss, and each parameter keeps its dtype: float32 parameters stay on the
-  float32 grid
+  float32 grid. With a validation set (`val_dataset`), both functions return the
+  parameters with the lowest sigma on it, and they can also stop when this sigma does not
+  decrease any more (`val_patience`, `val_min_delta`)
 - The models `SpectralNetwork` and `SpectralSirenNetwork` in `training/models.py`, the
   driver `training/spectral_stages.py` that fits the stages one after the other, and
   `training/generate_data.py` that stores a dataset of the Fermat quintic
+- The polynomial correction in `training/models.py`: `PolynomialBranch`, a homogeneous
+  polynomial of degree 2^d in its input from x^2 layers with no biases and a linear output,
+  and `PolynomialCorrection`, a sum of such branches on z_i z_j_bar / |z|^2 with the
+  Fubini-Study weight or the base weight exp(-(L/k0) (Phi_prev - k0 log|z|^2)) of the frozen
+  earlier stages. `calibrate_polynomial` gives the fixed layer scales, and
+  `reduced_potential_mean` gives the constant shift of the base weight. `SpectralNetwork`
+  takes `out_std`, a small standard deviation of the initial output weights
+- The options of `training/spectral_stages.py` for the comparison of the networks:
+  `--network poly` and `--network bihom`, `--branches`, `--weight`, `--base none`,
+  `--out_std`, `--validation`, `--val_patience` and `--lr_search`
 
 ## [2.2.2] - 2026-08-10
 

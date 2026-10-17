@@ -261,6 +261,15 @@ class _Plateau:
         return self.patience is not None and self.count >= self.patience
 
 
+def _make_validation_fn(model: Any, val_dataset: Optional[dict],
+                        val_batch_size: Optional[int]) -> Optional[Callable]:
+    """Sigma (weighted MAPE) of the full potential on the validation set, or None."""
+    if val_dataset is None:
+        return None
+    return jax.jit(mlg_loss.make_stage_loss_fn(
+        model, val_dataset, mlg_loss.weighted_MAPE, batch_size=val_batch_size))
+
+
 def train_stage_optax(model: Any,
                       dataset: Dict[str, jnp.ndarray],
                       optimizer: optax.GradientTransformation,
@@ -271,6 +280,11 @@ def train_stage_optax(model: Any,
                       patience: Optional[int] = None,
                       min_delta: float = 0.0,
                       loss_record: Optional[list] = None,
+                      val_dataset: Optional[Dict[str, jnp.ndarray]] = None,
+                      val_batch_size: Optional[int] = 10000,
+                      val_patience: Optional[int] = None,
+                      val_min_delta: float = 0.0,
+                      val_record: Optional[list] = None,
                       seed: int = 42,
                       verbose: bool = True,
                       history: Optional[list] = None) -> Tuple[Any, float]:
@@ -292,12 +306,21 @@ def train_stage_optax(model: Any,
             (1 - min_delta) times its best earlier value for this number of epochs.
         min_delta: Relative decrease of the loss that resets the patience count.
         loss_record: Optional list. The average loss of each epoch is appended to it.
+        val_dataset: Optional validation set with the keys of dataset. If set, sigma on it
+            is computed after each epoch, and the function returns the parameters with the
+            lowest sigma (the initial parameters included). It is never used for the fit.
+        val_batch_size: Batch size of the metric on the validation set.
+        val_patience: If set, also stop when the validation sigma has not gone below
+            (1 - val_min_delta) times its best earlier value for this number of epochs.
+        val_min_delta: Relative decrease of the validation sigma that resets val_patience.
+        val_record: Optional list. The validation sigma after each epoch is appended to it.
         seed: Random seed for the initialization and the shuffle.
         verbose: Whether to print progress.
         history: Optional list to append log messages to.
 
     Returns:
-        Tuple of (trained_params, final_avg_loss).
+        Tuple of (trained_params, final_avg_loss). With val_dataset: (the parameters with
+        the lowest validation sigma, that sigma).
     """
     if params is None:
         input_dim = dataset['points'].shape[-1]
@@ -328,6 +351,12 @@ def train_stage_optax(model: Any,
         if history is not None: history.append(msg)
     start_time = time.time()
 
+    val_fn = _make_validation_fn(model, val_dataset, val_batch_size)
+    if val_fn is not None:
+        best_val, best_params, best_epoch = float(val_fn(params)), params, 0
+        val_plateau = _Plateau(val_patience, val_min_delta)
+        val_plateau.update(best_val)
+
     plateau = _Plateau(patience, min_delta)
     avg_loss = 0.0
     for epoch in range(1, epochs + 1):
@@ -347,8 +376,18 @@ def train_stage_optax(model: Any,
         avg_loss = float(epoch_loss) / num_batches
         if loss_record is not None: loss_record.append(avg_loss)
 
+        val_stop = False
+        if val_fn is not None:
+            val_sigma = float(val_fn(params))
+            if val_record is not None: val_record.append(val_sigma)
+            if val_sigma < best_val:
+                best_val, best_params, best_epoch = val_sigma, params, epoch
+            val_stop = val_plateau.update(val_sigma)
+
         if verbose and (epoch % 10 == 0 or epoch == 1):
             msg = f"Epoch {epoch}: Avg Loss = {avg_loss:.5e}"
+            if val_fn is not None:
+                msg += f", Val Sigma = {val_sigma:.5e}"
             print(msg)
             if history is not None: history.append(msg)
 
@@ -360,12 +399,24 @@ def train_stage_optax(model: Any,
                 if history is not None: history.append(msg)
             break
 
+        if val_stop:
+            if verbose:
+                msg = (f"Stopped at epoch {epoch}: no relative decrease of the validation sigma "
+                       f"of {val_min_delta:g} in {val_patience} epochs")
+                print(msg)
+                if history is not None: history.append(msg)
+            break
+
     total_time = time.time() - start_time
     if verbose:
         msg = f"Training finished in {total_time:.2f}s. Final Loss: {avg_loss:.5e}"
+        if val_fn is not None:
+            msg += f". Best Val Sigma = {best_val:.5e} at epoch {best_epoch}"
         print(msg)
         if history is not None: history.append(msg)
 
+    if val_fn is not None:
+        return best_params, best_val
     return params, avg_loss
 
 
@@ -381,6 +432,11 @@ def train_stage_lbfgs(model: Any,
                       patience: Optional[int] = None,
                       min_delta: float = 0.0,
                       loss_record: Optional[list] = None,
+                      val_dataset: Optional[Dict[str, jnp.ndarray]] = None,
+                      val_batch_size: Optional[int] = 10000,
+                      val_patience: Optional[int] = None,
+                      val_min_delta: float = 0.0,
+                      val_record: Optional[list] = None,
                       seed: int = 42,
                       verbose: bool = True,
                       history: Optional[list] = None) -> Tuple[Any, float]:
@@ -404,15 +460,24 @@ def train_stage_lbfgs(model: Any,
             its best earlier value for this number of iterations.
         min_delta: Relative decrease of the loss that resets the patience count.
         loss_record: Optional list. The loss after each iteration is appended to it.
+        val_dataset: Optional validation set with the keys of dataset. If set, sigma on it
+            is computed after each iteration, and the function returns the parameters with
+            the lowest sigma (the initial parameters included). It is never used for the fit.
+        val_batch_size: Batch size of the metric on the validation set.
+        val_patience: If set, also stop when the validation sigma has not gone below
+            (1 - val_min_delta) times its best earlier value for this number of iterations.
+        val_min_delta: Relative decrease of the validation sigma that resets val_patience.
+        val_record: Optional list. The validation sigma after each iteration is appended to it.
         seed: Random seed for initialization (if params is None).
         verbose: Print status.
         history: Optional list to append log messages to.
 
     Returns:
-        (params with the lowest loss, that loss). A failed line search can make the
-        last iterate worse than an earlier one. Each parameter keeps its dtype: the
-        L-BFGS state is in config.real_dtype, and each iterate is rounded to the dtype
-        of each parameter, so float32 parameters stay on the float32 grid.
+        (params with the lowest loss, that loss), or with val_dataset (params with the
+        lowest validation sigma, that sigma). A failed line search can make the last
+        iterate worse than an earlier one. Each parameter keeps its dtype: the L-BFGS
+        state is in config.real_dtype, and each iterate is rounded to the dtype of each
+        parameter, so float32 parameters stay on the float32 grid.
     """
     if params is None:
         input_dim = dataset['points'].shape[-1]
@@ -479,6 +544,12 @@ def train_stage_lbfgs(model: Any,
     plateau = _Plateau(patience, min_delta)
     plateau.update(final_loss)
 
+    val_fn = _make_validation_fn(model, val_dataset, val_batch_size)
+    if val_fn is not None:
+        best_val, best_val_params, best_iter = float(val_fn(params)), params, 0
+        val_plateau = _Plateau(val_patience, val_min_delta)
+        val_plateau.update(best_val)
+
     for i in range(1, epochs + 1):
         params, state, loss_val, grad_norm = step(params, state)
         # After a rounding, the value of the line search is not the value at the iterate.
@@ -487,8 +558,18 @@ def train_stage_lbfgs(model: Any,
         if final_loss < best_loss:
             best_params, best_loss = params, final_loss
 
+        val_stop = False
+        if val_fn is not None:
+            val_sigma = float(val_fn(params))
+            if val_record is not None: val_record.append(val_sigma)
+            if val_sigma < best_val:
+                best_val, best_val_params, best_iter = val_sigma, params, i
+            val_stop = val_plateau.update(val_sigma)
+
         if verbose:
             msg = f"Iteration {i}: Loss = {final_loss:.5e}"
+            if val_fn is not None:
+                msg += f", Val Sigma = {val_sigma:.5e}"
             print(msg)
             if history is not None: history.append(msg)
 
@@ -507,10 +588,22 @@ def train_stage_lbfgs(model: Any,
                 if history is not None: history.append(msg)
             break
 
+        if val_stop:
+            if verbose:
+                msg = (f"Stopped at iteration {i}: no relative decrease of the validation sigma "
+                       f"of {val_min_delta:g} in {val_patience} iterations")
+                print(msg)
+                if history is not None: history.append(msg)
+            break
+
     if verbose:
         msg = f"L-BFGS finished in {time.time() - start_time:.2f}s. Final Loss: {best_loss:.5e}"
+        if val_fn is not None:
+            msg += f". Best Val Sigma = {best_val:.5e} at iteration {best_iter}"
         print(msg)
         if history is not None: history.append(msg)
 
+    if val_fn is not None:
+        best_params, best_loss = best_val_params, best_val
     best_params = jax.tree_util.tree_map(lambda x, dt: x.astype(dt), best_params, param_dtypes)
     return best_params, best_loss

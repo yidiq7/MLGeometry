@@ -1,18 +1,29 @@
 """
-Fits the stages of the spectral scheme one after the other on stored datasets.
+Fits the stages of a multi-stage potential one after the other on stored datasets.
 
-The base (stage 0) is the Fubini-Study potential log |z|^2. Each stage j adds a
-SpectralNetwork with the output amp_j * sinh(x). amp_j is the largest absolute error
-of the volume form of the potential before stage j on the fit set (max_abs_error).
-A stage runs Adam on mini-batches, and then L-BFGS with accumulated gradients. The
-restricted metric of the earlier stages is stored at each point (dataset['cymetric']),
-so a stage differentiates only its own network.
+The base (stage 0) is the Fubini-Study potential log |z|^2, or nothing (--base none).
+Each stage j adds a correction network. Its amp_j is the largest absolute error of the
+volume form of the potential before stage j on the fit set (max_abs_error). A stage runs
+Adam on mini-batches, and then L-BFGS with accumulated gradients. The restricted metric
+of the earlier stages is stored at each point (dataset['cymetric']), so a stage
+differentiates only its own network.
 
-Each loss in --lbfgs_losses gives one L-BFGS run from the same Adam result. The first
-one continues the chain to the next stage.
+The networks of --network:
+    tanh   SpectralNetwork: tanh layers on z_i z_j_bar / |z|^2, output amp * sinh(x).
+    siren  SpectralSirenNetwork: SirenDense layers in place of the tanh layers.
+    poly   PolynomialCorrection: x^2 layers on z_i z_j_bar / |z|^2, a linear output and
+           amp, as a sum of the branches of --branches. --weight base gives each branch
+           of degree L the base weight exp(-(L/k0) (Phi_prev - k0 log|z|^2)) of the frozen
+           earlier stages; --weight fs gives the weight 1.
+    bihom  Kahler_potential: log of a bihomogeneous network, a full potential with no FS
+           base (use --base none). Its class is k0 H with k0 = 2^len(layers).
 
---network siren puts SirenDense hidden layers in place of the tanh layers. With
---siren_float32, the SirenDense parameters of the stages to fit are float32, as the
+Each loss in --lbfgs_losses gives one L-BFGS run from the same Adam result. The first one
+continues the chain to the next stage. With --validation, each phase returns the
+parameters with the lowest sigma on the validation set; the validation set is never used
+for a fit. --lr_search picks the Adam learning rate by the validation sigma of short runs.
+
+With --siren_float32, the SirenDense parameters of the stages to fit are float32, as the
 branch FP64 created them. Their initial values are the float64 ones rounded to float32.
 
 Example (from the root folder of the repository):
@@ -33,7 +44,8 @@ import jax.numpy as jnp
 import optax
 
 import MLGeometry as mlg
-from models import SpectralNetwork, SpectralSirenNetwork, zerolayer
+from models import (SpectralNetwork, SpectralSirenNetwork, PolynomialCorrection, Kahler_potential,
+                    zerolayer, calibrate_polynomial, reduced_potential_mean)
 
 
 LOSSES = {
@@ -47,11 +59,14 @@ DATA_KEYS = ['points', 'Omega_Omegabar', 'mass', 'restriction']
 # --- Argument Parsing ---
 def parse_args():
     """Parses command line arguments."""
-    parser = argparse.ArgumentParser(description="Fit the stages of the spectral scheme.")
+    parser = argparse.ArgumentParser(description="Fit the stages of a multi-stage potential.")
 
     # Data and output
     parser.add_argument('--fit', type=str, required=True, help='The .npz file of the fit set.')
     parser.add_argument('--holdout', type=str, required=True, help='The .npz file of the hold-out set.')
+    parser.add_argument('--validation', type=str, default=None,
+                        help='The .npz file of the validation set. Each phase returns the parameters '
+                             'with the lowest sigma on it.')
     parser.add_argument('--save_dir', type=str, required=True,
                         help='Folder for the parameters, the stage files and summary.json.')
 
@@ -61,9 +76,21 @@ def parse_args():
                         help='The first stage to fit. The stages before it come from --load_dir.')
     parser.add_argument('--load_dir', type=str, default=None,
                         help='The save_dir of an earlier run with the stages before --start_stage.')
+    parser.add_argument('--base', type=str, default='fs', choices=['fs', 'none'],
+                        help='Stage 0: the Fubini-Study potential, or nothing (for --network bihom).')
+    parser.add_argument('--network', type=str, default='tanh', choices=['tanh', 'siren', 'poly', 'bihom'],
+                        help='The network of the stages to fit.')
     parser.add_argument('--layers', type=str, default='64_64_64', help='Hidden widths, e.g. "64_64_64".')
-    parser.add_argument('--network', type=str, default='tanh', choices=['tanh', 'siren'],
-                        help='Hidden layers of the stages to fit: tanh Dense or SirenDense.')
+    parser.add_argument('--branches', type=str, default=None,
+                        help='Branches of --network poly: widths with "_", branches with "+", e.g. '
+                             '"34_34+34_34_34". Default: one branch with --layers.')
+    parser.add_argument('--weight', type=str, default='fs', choices=['fs', 'base'],
+                        help='Weight of --network poly: 1 (fs), or the base weight of the frozen earlier stages.')
+    parser.add_argument('--out_std', type=float, default=None,
+                        help='Standard deviation of the initial output weights of tanh and poly. '
+                             'Default: Xavier for tanh, 1e-3 for poly.')
+    parser.add_argument('--calib_points', type=int, default=10000,
+                        help='Number of fit points for the fixed scales and the weight shift of poly.')
     parser.add_argument('--siren_float32', action='store_true',
                         help='Keep the SirenDense parameters of the stages to fit in float32.')
     parser.add_argument('--seed', type=int, default=42,
@@ -81,6 +108,16 @@ def parse_args():
                         help='Relative decrease on the scale of sigma and rms(f). An MSPE loss uses 2 times it.')
     parser.add_argument('--batch_size', type=int, default=1000, help='Mini-batch size of Adam.')
     parser.add_argument('--learning_rate', type=float, default=0.001)
+    parser.add_argument('--lr_search', type=str, default=None,
+                        help='Comma list of Adam learning rates. A short run with each picks the one with '
+                             'the lowest validation sigma. Needs --validation.')
+    parser.add_argument('--lr_search_epochs', type=int, default=50, help='Epochs of each short run.')
+    parser.add_argument('--lr_search_only', action='store_true',
+                        help='Stop after the learning rate search of the first stage to fit.')
+    parser.add_argument('--val_patience', type=int, default=None,
+                        help='Also stop Adam after this number of epochs with no relative decrease of '
+                             '--val_min_delta in the validation sigma.')
+    parser.add_argument('--val_min_delta', type=float, default=0.01)
 
     # L-BFGS
     parser.add_argument('--lbfgs_losses', type=str, nargs='+', default=['weighted_MAPE_amp_scaled'],
@@ -171,11 +208,41 @@ def n_params_of(params) -> int:
     return int(sum(x.size for x in jax.tree_util.tree_leaves(params)))
 
 
-def build_model(network: str, layers, amp: float, d: int):
-    """The correction model of one stage: SpectralNetwork (tanh) or SpectralSirenNetwork."""
+# --- Models ---
+def parse_branches(branches: str, layers: list) -> list:
+    """The branches of --network poly as lists of widths."""
+    if branches is None:
+        return [layers]
+    return [[int(u) for u in b.split('_')] for b in branches.split('+')]
+
+
+def build_model(meta: dict, d: int, phi_prev=None):
+    """The model of one stage from its description (see the stage<j>.json files)."""
+    network = meta['network']
     if network == 'siren':
-        return SpectralSirenNetwork(layers=layers, amp=amp, d=d)
-    return SpectralNetwork(layers=layers, amp=amp, d=d)
+        return SpectralSirenNetwork(layers=meta['layers'], amp=meta['amp'], d=d)
+    if network == 'poly':
+        return PolynomialCorrection(branches=meta['branches'], amp=meta['amp'], out_std=meta['out_std'],
+                                    scales=meta.get('scales'), phi_prev=phi_prev, k0=meta['k0'],
+                                    phi_shift=meta.get('phi_shift', 0.0), d=d)
+    if network == 'bihom':
+        return Kahler_potential(layers=meta['layers'], d=d)
+    return SpectralNetwork(layers=meta['layers'], amp=meta['amp'], out_std=meta.get('out_std'), d=d)
+
+
+def make_phi_prev(base: str, frozen: list):
+    """The frozen potential of the earlier stages as a function of z, for the base weight."""
+    # A copy, so that the stages appended later do not enter this potential.
+    frozen = list(frozen)
+
+    def phi_prev(z):
+        total = 0.0
+        if base == 'fs':
+            total = jnp.log(jnp.sum(jnp.real(z * jnp.conj(z)), axis=-1))
+        for model, params in frozen:
+            total = total + model.apply(params, z)[..., 0]
+        return total
+    return phi_prev
 
 
 def siren_to_float32(params):
@@ -214,18 +281,29 @@ def main():
 
     fit_set, fit_info = load_dataset(args.fit)
     holdout_set, holdout_info = load_dataset(args.holdout)
-    sets = {'fit': fit_set, 'holdout': holdout_set}
-    print(f"Fit set: {fit_info['n_points']} points (seed {fit_info['seed']}), "
-          f"hold-out: {holdout_info['n_points']} points (seed {holdout_info['seed']})")
+    sets = {'fit': fit_set}
+    data_info = {'fit': fit_info}
+    if args.validation is not None:
+        sets['validation'], data_info['validation'] = load_dataset(args.validation)
+    sets['holdout'], data_info['holdout'] = holdout_set, holdout_info
+    val_set = sets.get('validation')
+    print(', '.join(f"{name}: {info['n_points']} points (seed {info['seed']})" for name, info in data_info.items()))
+    if args.lr_search is not None and val_set is None:
+        raise ValueError("--lr_search needs --validation.")
 
     layers = [int(u) for u in args.layers.split('_')]
+    branches = parse_branches(args.branches, layers)
     d = int(fit_set['points'].shape[-1])
+
+    # The calibration points of poly: an even stride over the fit set, which is ordered by patch.
+    stride = max(1, fit_info['n_points'] // args.calib_points)
+    calib_points = fit_set['points'][::stride][:args.calib_points]
 
     summary = {
         'args': vars(args),
         'jax': jax.__version__,
         'devices': [str(dev) for dev in jax.devices()],
-        'data': {'fit': fit_info, 'holdout': holdout_info},
+        'data': data_info,
         'stages': [],
     }
     summary_path = os.path.join(args.save_dir, 'summary.json')
@@ -235,30 +313,43 @@ def main():
         with open(summary_path, 'w') as fp:
             json.dump(summary, fp, indent=1)
 
-    # --- Stage 0: the Fubini-Study base log |z|^2 ---
-    base = zerolayer(n_units=[])
-    base_params = mlg.trainer.init_params(base, (d,))
-    metrics = {name: mlg.loss.compute_cy_metric_batched(base, base_params, ds, args.eval_batch_size)
+    # The base of a loaded run comes from its stage 1.
+    base = args.base
+    if args.start_stage > 1:
+        with open(os.path.join(args.load_dir, 'stage1.json')) as fp:
+            base = json.load(fp).get('base', 'fs')
+
+    # --- Stage 0: the Fubini-Study base log |z|^2, or nothing ---
+    fs_model = zerolayer(n_units=[])
+    fs_params = mlg.trainer.init_params(fs_model, (d,))
+    metrics = {name: mlg.loss.compute_cy_metric_batched(fs_model, fs_params, ds, args.eval_batch_size)
                for name, ds in sets.items()}
     for name, ds in sets.items():
-        ds['cymetric'] = metrics[name]
+        ds['cymetric'] = metrics[name] if base == 'fs' else jnp.zeros_like(metrics[name])
         print_dtypes(f"{name} set with the stored metric of stage 0", ds)
     summary['dtypes'] = {name: dtypes_of(ds) for name, ds in sets.items()}
-    summary['stages'].append({'stage': 0, 'model': 'Fubini-Study log |z|^2', 'n_params': 0,
+    # With --base none, the FS numbers serve only as a reference and as the loss scale of stage 1.
+    summary['stages'].append({'stage': 0, 'model': 'Fubini-Study log |z|^2', 'base': base, 'n_params': 0,
                               'eval': evaluate(metrics, sets, 'stage 0, FS')})
     write_summary()
 
     # --- The stages before start_stage, from load_dir ---
+    frozen = []
+    k0 = 1
     for j in range(1, args.start_stage):
         with open(os.path.join(args.load_dir, f'stage{j}.json')) as fp:
             meta = json.load(fp)
-        model = build_model(meta.get('network', 'tanh'), meta['layers'], meta['amp'], d)
+        meta.setdefault('network', 'tanh')
+        k0 = meta.get('k0', 1)
+        phi_prev = make_phi_prev(base, frozen) if meta.get('weight') == 'base' else None
+        model = build_model(meta, d, phi_prev)
         params = load_pickle(os.path.join(args.load_dir, meta['chain_params']))
         metrics = {name: total_metric(model, params, ds, args.eval_batch_size) for name, ds in sets.items()}
         for name, ds in sets.items():
             ds['cymetric'] = metrics[name]
+        frozen.append((model, params))
         summary['stages'].append({'stage': j, 'loaded_from': os.path.join(args.load_dir, meta['chain_params']),
-                                  'amp': meta['amp'], 'n_params': n_params_of(params),
+                                  'network': meta['network'], 'amp': meta['amp'], 'n_params': n_params_of(params),
                                   'eval': evaluate(metrics, sets, f'stage {j}, loaded')})
         write_summary()
 
@@ -270,38 +361,90 @@ def main():
         amp = summary['stages'][-1]['eval']['fit']['max_abs_error']
         if j == args.start_stage and args.amp is not None:
             amp = args.amp
-        model = build_model(args.network, layers, amp, d)
-        stage = {'stage': j, 'seed': stage_seed, 'amp': amp, 'layers': layers, 'network': args.network,
-                 'siren_float32': args.siren_float32,
-                 'n_points_fit': fit_info['n_points'], 'n_points_holdout': holdout_info['n_points']}
-        summary['stages'].append(stage)
-        print(f"\n--- Stage {j}: amp = {amp:.6e}, seed = {stage_seed} ---")
 
-        # The initial parameters come from the stage seed. The float32 option rounds the SirenDense ones.
+        # The class of the potential: k0 = 1 on the FS base, 2^len(layers) for a bihomogeneous network.
+        if args.network == 'bihom':
+            if base != 'none' or j != 1:
+                raise ValueError("--network bihom is a full potential: use it at stage 1 with --base none.")
+            k0 = 2 ** len(layers)
+
+        meta = {'stage': j, 'network': args.network, 'base': base, 'layers': layers, 'amp': amp, 'k0': k0,
+                'siren_float32': args.siren_float32}
+        phi_prev = None
+        if args.network == 'poly':
+            meta.update({'branches': branches, 'weight': args.weight,
+                         'out_std': 1e-3 if args.out_std is None else args.out_std})
+            if args.weight == 'base':
+                phi_prev = make_phi_prev(base, frozen)
+                meta['phi_shift'] = reduced_potential_mean(phi_prev, k0, calib_points)
+        elif args.network == 'tanh':
+            meta['out_std'] = args.out_std
+
+        # The initial parameters come from the stage seed. poly then gets its fixed layer scales.
+        model = build_model(meta, d, phi_prev)
         params_init = mlg.trainer.init_params(model, (d,), stage_seed)
+        if args.network == 'poly':
+            meta['scales'], raw_rms = calibrate_polynomial(model, params_init, calib_points)
+            model = build_model(meta, d, phi_prev)
+            meta['raw_rms'] = raw_rms
+            print(f"poly: raw RMS of the x^2 layers {raw_rms}, fixed scales {meta['scales']}")
         if args.siren_float32:
             params_init = siren_to_float32(params_init)
 
+        stage = dict(meta, seed=stage_seed, n_params=n_params_of(params_init),
+                     n_points_fit=fit_info['n_points'], n_points_holdout=holdout_info['n_points'])
+        summary['stages'].append(stage)
+        print(f"\n--- Stage {j}: {args.network}, amp = {amp:.6e}, seed = {stage_seed}, "
+              f"{stage['n_params']} parameters ---")
+        adam_metric = functools.partial(LOSSES[args.adam_loss], amp=amp)
+
+        # The learning rate of Adam: the lowest validation sigma of short runs from the same start.
+        learning_rate = args.learning_rate
+        if args.lr_search is not None:
+            stage['lr_search'] = []
+            for lr in [float(u) for u in args.lr_search.split(',')]:
+                val_record = []
+                start = time.time()
+                _, best_val = mlg.trainer.train_stage_optax(
+                    model=model, dataset=fit_set, optimizer=optax.adam(lr), epochs=args.lr_search_epochs,
+                    batch_size=args.batch_size, loss_metric=adam_metric, params=params_init,
+                    val_dataset=val_set, val_batch_size=args.eval_batch_size, val_record=val_record,
+                    seed=stage_seed, verbose=False)
+                stage['lr_search'].append({'lr': lr, 'best_val_sigma': best_val, 'time_s': time.time() - start,
+                                           'val_record': val_record})
+                print(f"lr search: lr {lr:g}: best validation sigma {best_val:.5e} "
+                      f"in {args.lr_search_epochs} epochs ({time.time() - start:.0f}s)")
+            learning_rate = min(stage['lr_search'], key=lambda r: r['best_val_sigma'])['lr']
+            print(f"lr search: chose lr {learning_rate:g}")
+            write_summary()
+            if args.lr_search_only:
+                print(f"\nRun finished in {time.time() - run_start:.1f}s. Summary: {summary_path}")
+                return
+        stage['learning_rate'] = learning_rate
+
         # Adam on mini-batches.
-        adam_record, adam_history = [], []
+        adam_record, adam_val_record = [], []
         start = time.time()
         params_adam, adam_loss = mlg.trainer.train_stage_optax(
             model=model,
             dataset=fit_set,
-            optimizer=optax.adam(args.learning_rate),
+            optimizer=optax.adam(learning_rate),
             epochs=args.adam_epochs,
             batch_size=args.batch_size,
-            loss_metric=functools.partial(LOSSES[args.adam_loss], amp=amp),
+            loss_metric=adam_metric,
             params=params_init,
             patience=args.adam_patience,
             min_delta=stop_delta(args.adam_loss, args.adam_min_delta),
             loss_record=adam_record,
+            val_dataset=val_set,
+            val_batch_size=args.eval_batch_size,
+            val_patience=args.val_patience,
+            val_min_delta=args.val_min_delta,
+            val_record=adam_val_record,
             seed=stage_seed,
             verbose=True,
-            history=adam_history,
         )
         adam_time = time.time() - start
-        stage['n_params'] = n_params_of(params_adam)
         stage['dtypes_params'] = sorted({str(x.dtype) for x in jax.tree_util.tree_leaves(params_adam)})
         save_pickle(params_adam, os.path.join(args.save_dir, f'stage{j}_adam.pkl'))
         metrics_adam = {name: total_metric(model, params_adam, ds, args.eval_batch_size)
@@ -309,18 +452,18 @@ def main():
         stage['adam'] = {'loss': args.adam_loss, 'epochs': len(adam_record), 'time_s': adam_time,
                          'stopped_early': len(adam_record) < args.adam_epochs,
                          'min_delta': stop_delta(args.adam_loss, args.adam_min_delta),
-                         'final_loss': adam_loss, 'loss_record': adam_record,
+                         'final_loss': adam_loss, 'loss_record': adam_record, 'val_record': adam_val_record,
                          'eval': evaluate(metrics_adam, sets, f'stage {j}, Adam')}
         print(f"Stage {j}: {stage['n_params']} parameters, dtypes {stage['dtypes_params']}")
         write_summary()
 
         # L-BFGS from the same Adam result, once for each loss.
-        chain_metrics, chain_file = metrics_adam, f'stage{j}_adam.pkl'
+        chain_params, chain_metrics, chain_file = params_adam, metrics_adam, f'stage{j}_adam.pkl'
         stage['lbfgs'] = []
         lbfgs_losses = args.lbfgs_losses if args.lbfgs_epochs > 0 else []
         for k, loss_name in enumerate(lbfgs_losses):
             print(f"\n--- Stage {j}: L-BFGS on {loss_name} ---")
-            lbfgs_record, lbfgs_history = [], []
+            lbfgs_record, lbfgs_val_record = [], []
             start = time.time()
             params_lbfgs, lbfgs_loss = mlg.trainer.train_stage_lbfgs(
                 model=model,
@@ -332,9 +475,11 @@ def main():
                 patience=args.lbfgs_patience,
                 min_delta=stop_delta(loss_name, args.lbfgs_min_delta),
                 loss_record=lbfgs_record,
+                val_dataset=val_set,
+                val_batch_size=args.eval_batch_size,
+                val_record=lbfgs_val_record,
                 seed=stage_seed,
                 verbose=True,
-                history=lbfgs_history,
             )
             lbfgs_time = time.time() - start
             file_name = f'stage{j}_lbfgs_{loss_name}.pkl'
@@ -347,28 +492,31 @@ def main():
                                    'min_delta': stop_delta(loss_name, args.lbfgs_min_delta),
                                    'dtypes_params': sorted({str(x.dtype) for x in
                                                             jax.tree_util.tree_leaves(params_lbfgs)}),
-                                   'loss_record': lbfgs_record,
+                                   'loss_record': lbfgs_record, 'val_record': lbfgs_val_record,
                                    'eval': evaluate(metrics_lbfgs, sets, f'stage {j}, L-BFGS {loss_name}')})
             if k == 0:
-                chain_metrics, chain_file = metrics_lbfgs, file_name
+                chain_params, chain_metrics, chain_file = params_lbfgs, metrics_lbfgs, file_name
             write_summary()
 
         # The loss curves of the stage: Adam by epoch, and each L-BFGS run by iteration.
-        curves = {'adam_' + args.adam_loss: np.asarray(stage['adam']['loss_record'])}
+        curves = {'adam_' + args.adam_loss: np.asarray(stage['adam']['loss_record']),
+                  'adam_val_sigma': np.asarray(stage['adam']['val_record'])}
         for run in stage['lbfgs']:
             curves['lbfgs_' + run['loss']] = np.asarray(run['loss_record'])
+            curves['lbfgs_val_sigma_' + run['loss']] = np.asarray(run['val_record'])
         np.savez(os.path.join(args.save_dir, f'stage{j}_curves.npz'), amp=amp, **curves)
 
         # The chain continues with the first L-BFGS result.
         for name, ds in sets.items():
             ds['cymetric'] = chain_metrics[name]
+        frozen.append((model, chain_params))
         print_dtypes(f"fit set with the stored metric of stages 0 to {j}", fit_set)
         stage['dtypes_stored_metric'] = {name: str(ds['cymetric'].dtype) for name, ds in sets.items()}
         stage['eval'] = stage['lbfgs'][0]['eval'] if stage['lbfgs'] else stage['adam']['eval']
         stage['chain_params'] = chain_file
+        meta['chain_params'] = chain_file
         with open(os.path.join(args.save_dir, f'stage{j}.json'), 'w') as fp:
-            json.dump({'stage': j, 'layers': layers, 'amp': amp, 'network': args.network,
-                       'siren_float32': args.siren_float32, 'chain_params': chain_file}, fp, indent=1)
+            json.dump(meta, fp, indent=1)
         write_summary()
 
     print(f"\nRun finished in {time.time() - run_start:.1f}s. Summary: {summary_path}")

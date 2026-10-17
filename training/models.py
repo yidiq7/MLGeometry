@@ -1,12 +1,14 @@
 from flax import linen as nn
 import jax.numpy as jnp
 from MLGeometry import bihomoNN as bnn
-from typing import Any, Callable, Sequence
+from typing import Any, Callable, Optional, Sequence
 
 __all__ = ['Kahler_potential', 'zerolayer',
            'OuterProductNN_k2','OuterProductNN_k3','OuterProductNN_k4',
            'k2_twolayers', 'k2_threelayers','k4_onelayer','k4_twolayers',
-           'SpectralNetwork', 'SpectralSirenNetwork']
+           'SpectralNetwork', 'SpectralSirenNetwork',
+           'PolynomialBranch', 'PolynomialCorrection',
+           'calibrate_polynomial', 'reduced_potential_mean']
 
 # Helper activation
 def square_activation(x):
@@ -44,11 +46,14 @@ class SpectralNetwork(nn.Module):
 
     `layers` is the list of hidden widths. Each hidden layer is bnn.Dense with Xavier
     initialization and the activation. The width-1 output x gives amp * sinh(x), so amp
-    sets the scale of the correction.
+    sets the scale of the correction. If out_std is set, the output kernel starts from a
+    normal distribution with this standard deviation, so that the stage starts near the
+    potential before it. Otherwise it has Xavier initialization.
     """
     layers: Sequence[int]
     amp: Any = 1.0
     activation: Callable = jnp.tanh
+    out_std: Optional[float] = None
     d: int = 5
 
     @nn.compact
@@ -56,7 +61,10 @@ class SpectralNetwork(nn.Module):
         x = bnn.Spectral(d=self.d)(inputs)
         for feat in self.layers:
             x = bnn.Dense(features=feat, activation=self.activation)(x)
-        x = bnn.Dense(features=1)(x)
+        if self.out_std is None:
+            x = bnn.Dense(features=1)(x)
+        else:
+            x = bnn.Dense(features=1, kernel_init=nn.initializers.normal(stddev=self.out_std))(x)
         return self.amp * jnp.sinh(x)
 
 class SpectralSirenNetwork(nn.Module):
@@ -77,6 +85,98 @@ class SpectralSirenNetwork(nn.Module):
             x = bnn.SirenDense(features=feat, omega_0=self.omega_0, is_first_layer=(i == 0))(x)
         x = bnn.Dense(features=1)(x)
         return self.amp * jnp.sinh(x)
+
+class PolynomialBranch(nn.Module):
+    """A homogeneous polynomial of degree 2^len(widths) in its input.
+
+    Each hidden layer is bnn.SquareDense, h -> (h W)^2, with no bias, divided by a fixed
+    scale. The output layer is linear, with signed weights and no bias. Its kernel starts
+    from a normal distribution with the standard deviation out_std.
+    """
+    widths: Sequence[int]
+    scales: Optional[Sequence[float]] = None
+    out_std: float = 1e-3
+
+    @nn.compact
+    def __call__(self, x: jnp.ndarray) -> jnp.ndarray:
+        for i, feat in enumerate(self.widths):
+            x = bnn.SquareDense(features=feat)(x)
+            # A fixed scale keeps the units near 1; it does not change the degree.
+            if self.scales is not None:
+                x = x / self.scales[i]
+        return bnn.Dense(features=1, use_bias=False,
+                         kernel_init=nn.initializers.normal(stddev=self.out_std))(x)
+
+class PolynomialCorrection(nn.Module):
+    """Correction potential psi = amp * sum_L P_L(x) w_L(z) on x = z_i z_j_bar / |z|^2.
+
+    Each entry of `branches` is the list of widths of one PolynomialBranch P_L, of degree
+    L = 2^len(widths) in x. So P_L(x) = N_L(z) / |z|^(2L), with N_L of degree (L, L).
+    With phi_prev = None, w_L = 1: this is the Fubini-Study weight. With phi_prev, the
+    frozen potential of the earlier stages in the class k0 H, w_L is the base weight
+
+        w_L = exp(-(L / k0) (phi_prev(z) - k0 log|z|^2 - phi_shift)),
+
+    which has degree 0. Then psi = sum_L N_L(z) exp(-(L / k0) phi_prev(z)) up to a constant
+    factor of each branch. phi_shift (a constant) keeps the weights near 1. Autodiff goes
+    through phi_prev, so the metric of psi includes the derivatives of the weights.
+    """
+    branches: Sequence[Sequence[int]]
+    amp: Any = 1.0
+    out_std: float = 1e-3
+    scales: Optional[Sequence[Sequence[float]]] = None
+    phi_prev: Optional[Callable] = None
+    k0: int = 1
+    phi_shift: float = 0.0
+    d: int = 5
+
+    @nn.compact
+    def __call__(self, inputs: jnp.ndarray) -> jnp.ndarray:
+        x = bnn.Spectral(d=self.d)(inputs)
+        if self.phi_prev is not None:
+            log_norm = jnp.log(jnp.sum(jnp.real(inputs * jnp.conj(inputs)), axis=-1))
+            reduced = self.phi_prev(inputs) - self.k0 * log_norm - self.phi_shift
+        total = 0.0
+        for i, widths in enumerate(self.branches):
+            scales = None if self.scales is None else self.scales[i]
+            p = PolynomialBranch(widths=widths, scales=scales, out_std=self.out_std)(x)[..., 0]
+            if self.phi_prev is not None:
+                degree = 2 ** len(widths)
+                p = p * jnp.exp(-(degree / self.k0) * reduced)
+            total = total + p
+        return self.amp * total[..., None]
+
+def calibrate_polynomial(model: PolynomialCorrection, params: Any, points: jnp.ndarray) -> list:
+    """Fixed scales that give each x^2 layer of each branch an RMS of one on the points.
+
+    The output of a layer is homogeneous in the scales of the layers before it. So one pass
+    with no scales gives all of them: s_l = r_l / r_(l-1)^2, with r_l the RMS of the raw
+    output of layer l and r_0 = 1.
+
+    Returns:
+        (scales, raw_rms): two lists with one list of floats for each branch.
+    """
+    raw = model.clone(scales=None)
+    _, state = raw.apply(params, points, capture_intermediates=True, mutable=['intermediates'])
+    inter = state['intermediates']
+    scales, raw_rms = [], []
+    for i, widths in enumerate(model.branches):
+        branch = inter[f'PolynomialBranch_{i}']
+        r_prev, s, r_list = 1.0, [], []
+        for l in range(len(widths)):
+            h = branch[f'SquareDense_{l}']['__call__'][0]
+            r = float(jnp.sqrt(jnp.mean(h**2)))
+            s.append(r / r_prev**2)
+            r_list.append(r)
+            r_prev = r
+        scales.append(s)
+        raw_rms.append(r_list)
+    return scales, raw_rms
+
+def reduced_potential_mean(phi_prev: Callable, k0: int, points: jnp.ndarray) -> float:
+    """Mean of phi_prev(z) - k0 log|z|^2 on the points, the phi_shift of PolynomialCorrection."""
+    log_norm = jnp.log(jnp.sum(jnp.real(points * jnp.conj(points)), axis=-1))
+    return float(jnp.mean(phi_prev(points) - k0 * log_norm))
 
 class zerolayer(nn.Module):
     n_units: Sequence[int] # Not used but for consistency with interface
