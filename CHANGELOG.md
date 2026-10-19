@@ -34,6 +34,11 @@
 - The options of `training/spectral_stages.py` for the comparison of the networks:
   `--network poly` and `--network bihom`, `--branches`, `--weight`, `--base none`,
   `--out_std`, `--validation`, `--val_patience` and `--lr_search`
+- The model `SpectralWangLaiNetwork` in `training/models.py`, after Wang and Lai
+  (arXiv:2307.08934). Its first hidden layer is `ScaledSineDense`, sin(kappa x W + b) with a
+  fixed scale kappa on the kernel only. The tanh layers follow, and the output is linear
+  with no bias. The driver option `--network wanglai` with `--kappa`, and the loop
+  `training/wanglai_stage2.sh` of the control at stage 2
 
 ## [2.2.2] - 2026-08-10
 

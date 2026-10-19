@@ -1,12 +1,14 @@
 from flax import linen as nn
 import jax.numpy as jnp
 from MLGeometry import bihomoNN as bnn
+from MLGeometry import config
 from typing import Any, Callable, Optional, Sequence
 
 __all__ = ['Kahler_potential', 'zerolayer',
            'OuterProductNN_k2','OuterProductNN_k3','OuterProductNN_k4',
            'k2_twolayers', 'k2_threelayers','k4_onelayer','k4_twolayers',
            'SpectralNetwork', 'SpectralSirenNetwork',
+           'ScaledSineDense', 'SpectralWangLaiNetwork',
            'PolynomialBranch', 'PolynomialCorrection',
            'calibrate_polynomial', 'reduced_potential_mean']
 
@@ -85,6 +87,53 @@ class SpectralSirenNetwork(nn.Module):
             x = bnn.SirenDense(features=feat, omega_0=self.omega_0, is_first_layer=(i == 0))(x)
         x = bnn.Dense(features=1)(x)
         return self.amp * jnp.sinh(x)
+
+class ScaledSineDense(nn.Module):
+    """A dense layer with the output sin(kappa * (x @ W) + b).
+
+    W has the Xavier normal initialization of bnn.Dense, and b starts at zero. Only W gets
+    the fixed scale kappa, so kappa sets the frequencies of the units at initialization.
+    """
+    features: int
+    kappa: float = 1.0
+
+    @nn.compact
+    def __call__(self, inputs: jnp.ndarray) -> jnp.ndarray:
+        """
+        Args:
+            inputs: Real array of shape (..., n_in).
+
+        Returns:
+            Real array of shape (..., features).
+        """
+        kernel = self.param('kernel', nn.initializers.xavier_normal(),
+                            (inputs.shape[-1], self.features), config.real_dtype)
+        bias = self.param('bias', nn.initializers.zeros, (self.features,), config.real_dtype)
+        return jnp.sin(self.kappa * jnp.dot(inputs, kernel) + bias)
+
+class SpectralWangLaiNetwork(nn.Module):
+    """Correction potential of one stage with the scaled sine first layer of Wang and Lai.
+
+    Reference: Y. Wang and C.-Y. Lai, arXiv:2307.08934 (2023). The first hidden layer is
+    ScaledSineDense on the spectral features z_i z_j_bar / |z|^2. The other entries of
+    `layers` are bnn.Dense layers with tanh. The output is amp * (h @ w), linear and with no
+    bias. The kernel w starts from a normal distribution with the standard deviation out_std.
+    """
+    layers: Sequence[int]
+    kappa: float = 1.0
+    amp: Any = 1.0
+    out_std: float = 1e-3
+    d: int = 5
+
+    @nn.compact
+    def __call__(self, inputs: jnp.ndarray) -> jnp.ndarray:
+        x = bnn.Spectral(d=self.d)(inputs)
+        x = ScaledSineDense(features=self.layers[0], kappa=self.kappa)(x)
+        for feat in self.layers[1:]:
+            x = bnn.Dense(features=feat, activation=jnp.tanh)(x)
+        x = bnn.Dense(features=1, use_bias=False,
+                      kernel_init=nn.initializers.normal(stddev=self.out_std))(x)
+        return self.amp * x
 
 class PolynomialBranch(nn.Module):
     """A homogeneous polynomial of degree 2^len(widths) in its input.

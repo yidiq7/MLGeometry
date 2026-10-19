@@ -11,6 +11,9 @@ differentiates only its own network.
 The networks of --network:
     tanh   SpectralNetwork: tanh layers on z_i z_j_bar / |z|^2, output amp * sinh(x).
     siren  SpectralSirenNetwork: SirenDense layers in place of the tanh layers.
+    wanglai
+           SpectralWangLaiNetwork: the first hidden layer is sin(kappa x W + b) (--kappa),
+           the others are tanh layers, and the output amp * (h w) is linear with no bias.
     poly   PolynomialCorrection: x^2 layers on z_i z_j_bar / |z|^2, a linear output and
            amp, as a sum of the branches of --branches. --weight base gives each branch
            of degree L the base weight exp(-(L/k0) (Phi_prev - k0 log|z|^2)) of the frozen
@@ -44,8 +47,8 @@ import jax.numpy as jnp
 import optax
 
 import MLGeometry as mlg
-from models import (SpectralNetwork, SpectralSirenNetwork, PolynomialCorrection, Kahler_potential,
-                    zerolayer, calibrate_polynomial, reduced_potential_mean)
+from models import (SpectralNetwork, SpectralSirenNetwork, SpectralWangLaiNetwork, PolynomialCorrection,
+                    Kahler_potential, zerolayer, calibrate_polynomial, reduced_potential_mean)
 
 
 LOSSES = {
@@ -78,8 +81,10 @@ def parse_args():
                         help='The save_dir of an earlier run with the stages before --start_stage.')
     parser.add_argument('--base', type=str, default='fs', choices=['fs', 'none'],
                         help='Stage 0: the Fubini-Study potential, or nothing (for --network bihom).')
-    parser.add_argument('--network', type=str, default='tanh', choices=['tanh', 'siren', 'poly', 'bihom'],
+    parser.add_argument('--network', type=str, default='tanh', choices=['tanh', 'siren', 'wanglai', 'poly', 'bihom'],
                         help='The network of the stages to fit.')
+    parser.add_argument('--kappa', type=float, default=1.0,
+                        help='Scale of the first-layer kernel of --network wanglai: sin(kappa x W + b).')
     parser.add_argument('--layers', type=str, default='64_64_64', help='Hidden widths, e.g. "64_64_64".')
     parser.add_argument('--branches', type=str, default=None,
                         help='Branches of --network poly: widths with "_", branches with "+", e.g. '
@@ -87,8 +92,8 @@ def parse_args():
     parser.add_argument('--weight', type=str, default='fs', choices=['fs', 'base'],
                         help='Weight of --network poly: 1 (fs), or the base weight of the frozen earlier stages.')
     parser.add_argument('--out_std', type=float, default=None,
-                        help='Standard deviation of the initial output weights of tanh and poly. '
-                             'Default: Xavier for tanh, 1e-3 for poly.')
+                        help='Standard deviation of the initial output weights of tanh, wanglai and poly. '
+                             'Default: Xavier for tanh, 1e-3 for wanglai and poly.')
     parser.add_argument('--calib_points', type=int, default=10000,
                         help='Number of fit points for the fixed scales and the weight shift of poly.')
     parser.add_argument('--siren_float32', action='store_true',
@@ -221,6 +226,9 @@ def build_model(meta: dict, d: int, phi_prev=None):
     network = meta['network']
     if network == 'siren':
         return SpectralSirenNetwork(layers=meta['layers'], amp=meta['amp'], d=d)
+    if network == 'wanglai':
+        return SpectralWangLaiNetwork(layers=meta['layers'], kappa=meta['kappa'], amp=meta['amp'],
+                                      out_std=meta['out_std'], d=d)
     if network == 'poly':
         return PolynomialCorrection(branches=meta['branches'], amp=meta['amp'], out_std=meta['out_std'],
                                     scales=meta.get('scales'), phi_prev=phi_prev, k0=meta['k0'],
@@ -379,6 +387,8 @@ def main():
                 meta['phi_shift'] = reduced_potential_mean(phi_prev, k0, calib_points)
         elif args.network == 'tanh':
             meta['out_std'] = args.out_std
+        elif args.network == 'wanglai':
+            meta.update({'kappa': args.kappa, 'out_std': 1e-3 if args.out_std is None else args.out_std})
 
         # The initial parameters come from the stage seed. poly then gets its fixed layer scales.
         model = build_model(meta, d, phi_prev)
