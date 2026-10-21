@@ -6,14 +6,17 @@ from typing import Any, Callable, Dict, Optional, Tuple, Sequence
 import time
 import jax
 import jax.numpy as jnp
+import jax.scipy.linalg
+from jax.flatten_util import ravel_pytree
 import optax
 import optax.tree_utils as otu
 import numpy as np
 from . import loss as mlg_loss
+from . import complex_math
 from . import config
 
 __all__ = ['train_optax', 'train_lbfgs', 'train_stage_optax', 'train_stage_lbfgs',
-           'init_params']
+           'solve_stage_output', 'train_stage_lm', 'init_params']
 
 
 def init_params(model: Any, input_shape: Sequence[int], seed: int = 42) -> Any:
@@ -607,3 +610,392 @@ def train_stage_lbfgs(model: Any,
         best_params, best_loss = best_val_params, best_val
     best_params = jax.tree_util.tree_map(lambda x, dt: x.astype(dt), best_params, param_dtypes)
     return best_params, best_loss
+
+
+# --- Exact solve and Levenberg-Marquardt for one stage ---
+
+def _batched(arrays: Dict[str, jnp.ndarray], batch_size: int) -> Tuple[Dict[str, jnp.ndarray], int]:
+    """Pads each array to a multiple of batch_size and splits it into batches.
+
+    The filler rows repeat the last row, so the model sees only real points.
+
+    Returns:
+        (the arrays with the shape (n_batches, batch_size, ...), the number of real rows).
+    """
+    n_points = next(iter(arrays.values())).shape[0]
+    pad_len = (-n_points) % batch_size
+
+    def pad(arr):
+        arr = jnp.asarray(arr)
+        if pad_len > 0:
+            arr = jnp.concatenate([arr, jnp.repeat(arr[-1:], pad_len, axis=0)], axis=0)
+        return arr.reshape((-1, batch_size) + arr.shape[1:])
+    return {k: pad(v) for k, v in arrays.items()}, n_points
+
+
+def _pad_rows(x: jnp.ndarray, batch_size: int) -> jnp.ndarray:
+    """Pads a vector with zeros to a multiple of batch_size and splits it into batches."""
+    pad_len = (-x.shape[0]) % batch_size
+    return jnp.concatenate([x, jnp.zeros(pad_len, x.dtype)]).reshape(-1, batch_size)
+
+
+def _stage_arrays(dataset: dict, batch_size: int) -> Tuple[Dict[str, jnp.ndarray], int]:
+    """The batched points, restrictions and stored metrics of a dataset."""
+    return _batched({k: dataset[k] for k in ('points', 'restriction', 'cymetric')}, batch_size)
+
+
+def _mass_weights(dataset: dict) -> jnp.ndarray:
+    """The weights w_i = mass_i / sum(mass)."""
+    mass = jnp.asarray(dataset['mass'])
+    return mass / jnp.sum(mass)
+
+
+def _make_stage_residual_fn(model: Any, dataset: dict, to_params: Callable,
+                            batch_size: int) -> Callable:
+    """The function x -> f, with f_i = eta_i - 1 of the full potential at each point.
+
+    eta_i = rho_i / rho_bar, with rho_i = det g_i / Omega_Omegabar_i, g_i the stored metric
+    plus the metric of the model with the parameters to_params(x), and rho_bar the mean of
+    rho with the weights w_i.
+    """
+    batched, n_points = _stage_arrays(dataset, batch_size)
+    omega = jnp.asarray(dataset['Omega_Omegabar'])
+    weights = _mass_weights(dataset)
+
+    @jax.jit
+    def residual(x, batched, omega, weights):
+        params = to_params(x)
+        vols = jax.lax.map(lambda b: mlg_loss._compute_stage_volumes(model, params, b), batched)
+        rho = vols.reshape(-1)[:n_points] / omega
+        return rho / jnp.sum(weights * rho) - 1.0
+
+    return lambda x: residual(x, batched, omega, weights)
+
+
+def _make_log_volume_grad(model: Any, to_params: Callable) -> Callable:
+    """The gradient a_i of log det g_i with respect to x at each point of a batch.
+
+    g_i is the stored metric plus the metric of the model with the parameters to_params(x).
+    The function maps (x, points, restriction, cymetric) to an array (batch, x.size).
+    """
+    def log_volume(x, point, restriction, cymetric):
+        params = to_params(x)
+
+        def potential(z):
+            return jnp.real(model.apply(params, z[None, :])[0, 0])
+        hessian = complex_math.complex_hessian(potential, point)
+        metric = cymetric + restriction @ hessian @ jnp.conj(restriction).T
+        return jnp.log(jnp.real(jnp.linalg.det(metric)))
+
+    return jax.vmap(jax.grad(log_volume), in_axes=(None, 0, 0, 0))
+
+
+def _make_stage_rows_fn(model: Any, dataset: dict, to_params: Callable, index: jnp.ndarray,
+                        batch_size: int) -> Callable:
+    """The function x -> the entries `index` of a_i at each point, an array (n_points, index.size)."""
+    batched, n_points = _stage_arrays(dataset, batch_size)
+    grad_fn = _make_log_volume_grad(model, to_params)
+
+    @jax.jit
+    def rows(x, batched):
+        a = jax.lax.map(lambda b: grad_fn(x, b['points'], b['restriction'], b['cymetric'])[:, index],
+                        batched)
+        return a.reshape(-1, a.shape[-1])[:n_points]
+
+    return lambda x: rows(x, batched)
+
+
+def _make_stage_normal_fn(model: Any, dataset: dict, to_params: Callable,
+                          batch_size: int) -> Callable:
+    """The function (x, f) -> (J^T J, J^T r) of the residual r_i = sqrt(w_i) f_i.
+
+    The row of J at point i is sqrt(w_i) (1 + f_i) (a_i - a_bar), with a_bar =
+    sum_j w_j (1 + f_j) a_j the gradient of log rho_bar. The sums run over batches, so J
+    itself is never stored.
+    """
+    batched, _ = _stage_arrays(dataset, batch_size)
+    weights = _pad_rows(_mass_weights(dataset), batch_size)
+    grad_fn = _make_log_volume_grad(model, to_params)
+
+    @jax.jit
+    def normal(x, f, batched, weights):
+        # The filler rows have the weight zero, so they add nothing to the sums.
+        f = _pad_rows(f, batch_size)
+        n = x.shape[0]
+        zeros = jnp.zeros(n, x.dtype)
+
+        def body(carry, inputs):
+            s, u, a_bar, v = carry
+            batch, w, fb = inputs
+            a = grad_fn(x, batch['points'], batch['restriction'], batch['cymetric'])
+            w1 = w * (1.0 + fb)
+            w2 = w1 * (1.0 + fb)
+            return (s + a.T @ (w2[:, None] * a), u + w2 @ a, a_bar + w1 @ a, v + (w1 * fb) @ a), None
+
+        (s, u, a_bar, v), _ = jax.lax.scan(body, (jnp.zeros((n, n), x.dtype), zeros, zeros, zeros),
+                                           (batched, weights, f))
+        c = jnp.sum(weights * (1.0 + f)**2)
+        q = jnp.sum(weights * (1.0 + f) * f)
+        jtj = s - jnp.outer(u, a_bar) - jnp.outer(a_bar, u) + c * jnp.outer(a_bar, a_bar)
+        return 0.5 * (jtj + jtj.T), v - q * a_bar
+
+    return lambda x, f: normal(x, f, batched, weights)
+
+
+@jax.jit
+def _lm_delta(jtj: jnp.ndarray, jtr: jnp.ndarray, damping: Any) -> jnp.ndarray:
+    """The solution of (J^T J + damping diag(J^T J)) delta = -J^T r by a Cholesky factorization."""
+    idx = jnp.arange(jtj.shape[0])
+    matrix = jtj.at[idx, idx].add(damping * jnp.diag(jtj))
+    chol = jnp.linalg.cholesky(matrix)
+    return -jax.scipy.linalg.cho_solve((chol, True), jtr)
+
+
+def _leaf_index(params: Any, name: str) -> jnp.ndarray:
+    """The positions in ravel_pytree(params) of the leaves with `name` in their path."""
+    def mark(path, x):
+        names = [str(getattr(k, 'key', k)) for k in path]
+        return jnp.full(jnp.shape(x), 1.0 if name in names else 0.0)
+    mask, _ = ravel_pytree(jax.tree_util.tree_map_with_path(mark, params))
+    return jnp.nonzero(mask > 0.5)[0]
+
+
+def solve_stage_output(model: Any,
+                       dataset: Dict[str, jnp.ndarray],
+                       params: Any,
+                       solves: int = 3,
+                       output_name: str = 'output',
+                       batch_size: int = 2000,
+                       val_dataset: Optional[Dict[str, jnp.ndarray]] = None,
+                       val_batch_size: Optional[int] = 10000,
+                       step_record: Optional[list] = None,
+                       verbose: bool = True,
+                       history: Optional[list] = None) -> Tuple[Any, float]:
+    """
+    Solves the linear output layer of one stage exactly, with the hidden layers fixed.
+
+    To first order in the change dc of the output kernel c, f_i(c + dc) = f_i + J_i dc, with
+    J_i = (1 + f_i) (a_i - a_bar), a_i the gradient of log det g_i with respect to c, that is
+    tr(g_i^-1 d dbar psi_m) for the output units, and a_bar the gradient of log rho_bar, the
+    change of the mean of the volume form. Each solve minimizes sum_i w_i (f_i + J_i dc)^2
+    with a QR factorization of the rows sqrt(w_i) J_i, and the next solve starts from the new f.
+    The dataset must hold 'cymetric', the restricted metric of the earlier stages.
+
+    Args:
+        model: Flax model of the correction potential, linear in the kernel of `output_name`.
+        dataset: Data dictionary, 'cymetric' included.
+        params: Parameters of the model. The output kernel is the start of the first solve.
+        solves: Number of solves.
+        output_name: Name of the output layer in the parameter tree.
+        batch_size: Number of points in each batch of the metric and of the gradients.
+        val_dataset: Optional validation set with the keys of dataset. If set, the function
+            returns the parameters with the lowest sigma on it, the start included.
+        val_batch_size: Batch size of the metric on the validation set.
+        step_record: Optional list. One dict for each solve is appended to it: the MSPE and
+            sigma on the dataset, the validation sigma, the condition number of the rows and
+            the time.
+        verbose: Whether to print progress.
+        history: Optional list to append log messages to.
+
+    Returns:
+        (params after the last solve, their MSPE on the dataset), or with val_dataset (the
+        parameters with the lowest validation sigma, that sigma).
+    """
+    theta, unravel = ravel_pytree(params)
+    index = _leaf_index(params, output_name)
+    if index.size == 0:
+        raise ValueError(f"The parameters have no layer with the name '{output_name}'.")
+    residual_fn = _make_stage_residual_fn(model, dataset, unravel, batch_size)
+    rows_fn = _make_stage_rows_fn(model, dataset, unravel, index, batch_size)
+    weights = _mass_weights(dataset)
+    sqrt_w = jnp.sqrt(weights)
+    val_fn = _make_validation_fn(model, val_dataset, val_batch_size)
+
+    def report(k, f, cond, elapsed):
+        entry = {'solve': k, 'mspe': float(jnp.sum(weights * f**2)),
+                 'sigma': float(jnp.sum(weights * jnp.abs(f))), 'cond': cond, 'time_s': elapsed}
+        if val_fn is not None:
+            entry['sigma_val'] = float(val_fn(unravel(theta)))
+        if step_record is not None: step_record.append(entry)
+        if verbose:
+            msg = (f"Solve {k}: MSPE = {entry['mspe']:.5e}, Sigma = {entry['sigma']:.5e}"
+                   + (f", Val Sigma = {entry['sigma_val']:.5e}" if val_fn is not None else "")
+                   + (f", cond = {cond:.3e}" if cond is not None else ""))
+            print(msg)
+            if history is not None: history.append(msg)
+        return entry
+
+    start_time = time.time()
+    f = residual_fn(theta)
+    entry = report(0, f, None, 0.0)
+    best_params, best_val = theta, entry.get('sigma_val')
+    for k in range(1, solves + 1):
+        t0 = time.time()
+        a = rows_fn(theta)
+        a_bar = (weights * (1.0 + f)) @ a
+        rows = (sqrt_w * (1.0 + f))[:, None] * (a - a_bar)
+        q, r = jnp.linalg.qr(rows)
+        dc = -jax.scipy.linalg.solve_triangular(r, q.T @ (sqrt_w * f))
+        sv = jnp.linalg.svd(r, compute_uv=False)
+        theta = theta.at[index].add(dc)
+        f = residual_fn(theta)
+        entry = report(k, f, float(sv[0] / sv[-1]), time.time() - t0)
+        if val_fn is not None and entry['sigma_val'] < best_val:
+            best_params, best_val = theta, entry['sigma_val']
+
+    if verbose:
+        msg = f"Solves finished in {time.time() - start_time:.2f}s."
+        print(msg)
+        if history is not None: history.append(msg)
+
+    if val_fn is not None:
+        return unravel(best_params), best_val
+    return unravel(theta), float(jnp.sum(weights * f**2))
+
+
+def train_stage_lm(model: Any,
+                   dataset: Dict[str, jnp.ndarray],
+                   epochs: int,
+                   params: Any,
+                   batch_size: int = 2000,
+                   damping: float = 1e-3,
+                   patience: Optional[int] = None,
+                   min_delta: float = 0.0,
+                   val_dataset: Optional[Dict[str, jnp.ndarray]] = None,
+                   val_batch_size: Optional[int] = 10000,
+                   step_record: Optional[list] = None,
+                   verbose: bool = True,
+                   history: Optional[list] = None) -> Tuple[Any, float]:
+    """
+    Runs Levenberg-Marquardt for one stage on the MSPE of the full dataset, on all parameters.
+
+    The residual is r_i = sqrt(w_i) f_i, with w_i = mass_i / sum(mass) and f_i = eta_i - 1
+    for the volume form normalized by its mean over the dataset. Each step sums J^T J and
+    J^T r over batches, with the change of the mean in J, and solves
+    (J^T J + damping diag(J^T J)) delta = -J^T r with a Cholesky factorization. If the
+    factorization fails, the damping grows by 10. A step is accepted only if the MSPE falls.
+    The damping follows the gain ratio rho, the actual over the predicted decrease of the
+    MSPE: an accepted step multiplies it by max(1/3, 1 - (2 rho - 1)^3), and a rejected step
+    by nu, which then doubles. A rejected step reuses J^T J. The dataset must hold
+    'cymetric', the restricted metric of the earlier stages.
+
+    Args:
+        model: Flax model of the correction potential of this stage.
+        dataset: Data dictionary, 'cymetric' included.
+        epochs: Maximum number of LM steps, accepted or rejected.
+        params: Initial parameters.
+        batch_size: Number of points in each batch of the sums.
+        damping: Initial damping lambda.
+        patience: If set, stop when the validation sigma (with no validation set, the MSPE)
+            has not gone below (1 - min_delta) times its best earlier value for this number
+            of steps.
+        min_delta: Relative decrease that resets the patience count.
+        val_dataset: Optional validation set with the keys of dataset. If set, sigma on it
+            is computed after each accepted step, and the function returns the parameters
+            with the lowest sigma (the initial parameters included).
+        val_batch_size: Batch size of the metric on the validation set.
+        step_record: Optional list. One dict for each step is appended to it: the damping,
+            the acceptance, the gain ratio, the MSPE and sigma on the dataset, the validation
+            sigma, the ratio of the largest to the smallest diagonal entry of J^T J, and the
+            times.
+        verbose: Whether to print progress.
+        history: Optional list to append log messages to.
+
+    Returns:
+        (params with the lowest validation sigma, that sigma), or with no validation set
+        (the last accepted params, their MSPE).
+    """
+    theta, unravel = ravel_pytree(params)
+    residual_fn = _make_stage_residual_fn(model, dataset, unravel, batch_size)
+    normal_fn = _make_stage_normal_fn(model, dataset, unravel, batch_size)
+    weights = _mass_weights(dataset)
+    val_fn = _make_validation_fn(model, val_dataset, val_batch_size)
+
+    if verbose:
+        msg = f"Starting LM training (Full Batch, {theta.size} parameters, {epochs} steps)..."
+        print(msg)
+        if history is not None: history.append(msg)
+    start_time = time.time()
+
+    f = residual_fn(theta)
+    mspe = float(jnp.sum(weights * f**2))
+    sigma = float(jnp.sum(weights * jnp.abs(f)))
+    val_sigma = float(val_fn(unravel(theta))) if val_fn is not None else None
+    best_theta, best_val = theta, val_sigma
+    plateau = _Plateau(patience, min_delta)
+    plateau.update(val_sigma if val_fn is not None else mspe)
+    if verbose:
+        msg = f"Initial MSPE = {mspe:.5e}, Sigma = {sigma:.5e}" + (
+            f", Val Sigma = {val_sigma:.5e}" if val_fn is not None else "")
+        print(msg)
+        if history is not None: history.append(msg)
+
+    jtj = None
+    nu = 2.0
+    for step in range(1, epochs + 1):
+        t0 = time.time()
+        time_normal = 0.0
+        if jtj is None:
+            jtj, jtr = normal_fn(theta, f)
+            diag = jnp.diag(jtj)
+            diag_ratio = float(jnp.max(diag) / jnp.min(diag))
+            time_normal = time.time() - t0
+
+        used_damping, retries = damping, 0
+        delta = _lm_delta(jtj, jtr, used_damping)
+        while not bool(jnp.all(jnp.isfinite(delta))) and retries < 30:
+            used_damping, retries = used_damping * 10.0, retries + 1
+            delta = _lm_delta(jtj, jtr, used_damping)
+        predicted = float(-2.0 * (delta @ jtr) - delta @ (jtj @ delta))
+
+        f_new = residual_fn(theta + delta)
+        mspe_new = float(jnp.sum(weights * f_new**2))
+        gain = (mspe - mspe_new) / predicted if predicted > 0 else -np.inf
+        accepted = bool(np.isfinite(mspe_new) and mspe_new < mspe)
+        if accepted:
+            theta, f, mspe = theta + delta, f_new, mspe_new
+            sigma = float(jnp.sum(weights * jnp.abs(f)))
+            jtj = None
+            # Nielsen's rule; a gain ratio that is not finite keeps the damping.
+            factor = max(1.0 / 3.0, 1.0 - (2.0 * gain - 1.0)**3) if np.isfinite(gain) else 1.0
+            damping = used_damping * factor
+            nu = 2.0
+            if val_fn is not None:
+                val_sigma = float(val_fn(unravel(theta)))
+                if val_sigma < best_val:
+                    best_theta, best_val = theta, val_sigma
+        else:
+            damping = used_damping * nu
+            nu *= 2.0
+
+        entry = {'step': step, 'damping': used_damping, 'cholesky_retries': retries,
+                 'accepted': accepted, 'gain_ratio': float(gain), 'mspe_fit': mspe,
+                 'sigma_fit': sigma, 'sigma_val': val_sigma, 'diag_ratio': diag_ratio,
+                 'time_normal_s': time_normal, 'time_s': time.time() - t0}
+        if step_record is not None: step_record.append(entry)
+        if verbose:
+            msg = (f"LM step {step}: MSPE = {mspe:.5e}, Sigma = {sigma:.5e}"
+                   + (f", Val Sigma = {val_sigma:.5e}" if val_fn is not None else "")
+                   + f", lambda = {used_damping:.3e}, gain = {gain:.3e}, "
+                   + ("accepted" if accepted else "rejected") + f", {entry['time_s']:.1f}s")
+            print(msg)
+            if history is not None: history.append(msg)
+
+        if plateau.update(val_sigma if val_fn is not None else mspe):
+            if verbose:
+                msg = (f"Stopped at step {step}: no relative decrease of {min_delta:g} "
+                       f"in {patience} steps")
+                print(msg)
+                if history is not None: history.append(msg)
+            break
+
+    if verbose:
+        msg = f"LM finished in {time.time() - start_time:.2f}s. Final MSPE: {mspe:.5e}"
+        if val_fn is not None:
+            msg += f". Best Val Sigma = {best_val:.5e}"
+        print(msg)
+        if history is not None: history.append(msg)
+
+    if val_fn is not None:
+        return unravel(best_theta), best_val
+    return unravel(theta), mspe

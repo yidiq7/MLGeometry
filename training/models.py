@@ -7,7 +7,7 @@ from typing import Any, Callable, Optional, Sequence
 __all__ = ['Kahler_potential', 'zerolayer',
            'OuterProductNN_k2','OuterProductNN_k3','OuterProductNN_k4',
            'k2_twolayers', 'k2_threelayers','k4_onelayer','k4_twolayers',
-           'SpectralNetwork', 'SpectralSirenNetwork',
+           'SpectralNetwork', 'SpectralLinearNetwork', 'SpectralSirenNetwork',
            'ScaledSineDense', 'SpectralWangLaiNetwork',
            'PolynomialBranch', 'PolynomialCorrection',
            'calibrate_polynomial', 'reduced_potential_mean']
@@ -68,6 +68,28 @@ class SpectralNetwork(nn.Module):
         else:
             x = bnn.Dense(features=1, kernel_init=nn.initializers.normal(stddev=self.out_std))(x)
         return self.amp * jnp.sinh(x)
+
+class SpectralLinearNetwork(nn.Module):
+    """SpectralNetwork with the linear output amp * (h @ w), with no sinh and no bias.
+
+    A bias of the output is a constant of the potential, so it does not change the metric.
+    The output layer has the name 'output', so that a solve can find its kernel w. The
+    kernel starts from a normal distribution with the standard deviation out_std.
+    """
+    layers: Sequence[int]
+    amp: Any = 1.0
+    activation: Callable = jnp.tanh
+    out_std: float = 1e-3
+    d: int = 5
+
+    @nn.compact
+    def __call__(self, inputs: jnp.ndarray) -> jnp.ndarray:
+        x = bnn.Spectral(d=self.d)(inputs)
+        for feat in self.layers:
+            x = bnn.Dense(features=feat, activation=self.activation)(x)
+        x = bnn.Dense(features=1, use_bias=False, name='output',
+                      kernel_init=nn.initializers.normal(stddev=self.out_std))(x)
+        return self.amp * x
 
 class SpectralSirenNetwork(nn.Module):
     """SpectralNetwork with SIREN hidden layers, bnn.SirenDense with the sine activation.

@@ -39,6 +39,16 @@
   fixed scale kappa on the kernel only. The tanh layers follow, and the output is linear
   with no bias. The driver option `--network wanglai` with `--kappa`, and the loop
   `training/wanglai_stage2.sh` of the control at stage 2
+- `solve_stage_output` and `train_stage_lm` in `trainer`. `solve_stage_output` solves the
+  linear output layer of a stage exactly with the hidden layers fixed, by QR solves of the
+  linearized residual. `train_stage_lm` runs Levenberg-Marquardt on all parameters of a
+  stage, full batch on MSPE: it sums J^T J and J^T r over batches, solves the damped normal
+  equations with a Cholesky factorization, and adapts the damping by the gain ratio. In
+  both, J includes the change of the mean of the volume form
+- The model `SpectralLinearNetwork` in `training/models.py`, the tanh network with the
+  linear output amp * (h w) with no sinh and no bias, and the driver options
+  `--network tanh_linear`, `--init_params`, `--output_solves`, `--lm_steps`,
+  `--lm_patience`, `--lm_min_delta`, `--lm_damping` and `--lm_batch_size`
 
 ## [2.2.2] - 2026-08-10
 
