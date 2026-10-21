@@ -744,9 +744,14 @@ def _make_stage_normal_fn(model: Any, dataset: dict, to_params: Callable,
 
 @jax.jit
 def _lm_delta(jtj: jnp.ndarray, jtr: jnp.ndarray, damping: Any) -> jnp.ndarray:
-    """The solution of (J^T J + damping diag(J^T J)) delta = -J^T r by a Cholesky factorization."""
+    """The solution of (J^T J + damping diag(J^T J)) delta = -J^T r by a Cholesky factorization.
+
+    A zero entry of diag(J^T J) belongs to a parameter with no effect on f. It takes the
+    damping alone, so its step is zero.
+    """
     idx = jnp.arange(jtj.shape[0])
-    matrix = jtj.at[idx, idx].add(damping * jnp.diag(jtj))
+    diag = jnp.diag(jtj)
+    matrix = jtj.at[idx, idx].add(damping * jnp.where(diag > 0, diag, 1.0))
     chol = jnp.linalg.cholesky(matrix)
     return -jax.scipy.linalg.cho_solve((chol, True), jtr)
 
@@ -788,8 +793,8 @@ def solve_stage_output(model: Any,
         solves: Number of solves.
         output_name: Name of the output layer in the parameter tree.
         batch_size: Number of points in each batch of the metric and of the gradients.
-        val_dataset: Optional validation set with the keys of dataset. If set, the function
-            returns the parameters with the lowest sigma on it, the start included.
+        val_dataset: Optional validation set with the keys of dataset. If set, sigma on it is
+            recorded after each solve. It does not select the result.
         val_batch_size: Batch size of the metric on the validation set.
         step_record: Optional list. One dict for each solve is appended to it: the MSPE and
             sigma on the dataset, the validation sigma, the condition number of the rows and
@@ -798,8 +803,7 @@ def solve_stage_output(model: Any,
         history: Optional list to append log messages to.
 
     Returns:
-        (params after the last solve, their MSPE on the dataset), or with val_dataset (the
-        parameters with the lowest validation sigma, that sigma).
+        (params after the last solve, their MSPE on the dataset).
     """
     theta, unravel = ravel_pytree(params)
     index = _leaf_index(params, output_name)
@@ -827,8 +831,7 @@ def solve_stage_output(model: Any,
 
     start_time = time.time()
     f = residual_fn(theta)
-    entry = report(0, f, None, 0.0)
-    best_params, best_val = theta, entry.get('sigma_val')
+    report(0, f, None, 0.0)
     for k in range(1, solves + 1):
         t0 = time.time()
         a = rows_fn(theta)
@@ -839,17 +842,13 @@ def solve_stage_output(model: Any,
         sv = jnp.linalg.svd(r, compute_uv=False)
         theta = theta.at[index].add(dc)
         f = residual_fn(theta)
-        entry = report(k, f, float(sv[0] / sv[-1]), time.time() - t0)
-        if val_fn is not None and entry['sigma_val'] < best_val:
-            best_params, best_val = theta, entry['sigma_val']
+        report(k, f, float(sv[0] / sv[-1]), time.time() - t0)
 
     if verbose:
         msg = f"Solves finished in {time.time() - start_time:.2f}s."
         print(msg)
         if history is not None: history.append(msg)
 
-    if val_fn is not None:
-        return unravel(best_params), best_val
     return unravel(theta), float(jnp.sum(weights * f**2))
 
 
@@ -896,8 +895,8 @@ def train_stage_lm(model: Any,
         val_batch_size: Batch size of the metric on the validation set.
         step_record: Optional list. One dict for each step is appended to it: the damping,
             the acceptance, the gain ratio, the MSPE and sigma on the dataset, the validation
-            sigma, the ratio of the largest to the smallest diagonal entry of J^T J, and the
-            times.
+            sigma, the ratio of the largest to the smallest positive diagonal entry of J^T J,
+            the number of its zero diagonal entries, and the times.
         verbose: Whether to print progress.
         history: Optional list to append log messages to.
 
@@ -938,7 +937,8 @@ def train_stage_lm(model: Any,
         if jtj is None:
             jtj, jtr = normal_fn(theta, f)
             diag = jnp.diag(jtj)
-            diag_ratio = float(jnp.max(diag) / jnp.min(diag))
+            n_zero = int(jnp.sum(diag <= 0))
+            diag_ratio = float(jnp.max(diag) / jnp.min(jnp.where(diag > 0, diag, jnp.inf)))
             time_normal = time.time() - t0
 
         used_damping, retries = damping, 0
@@ -971,6 +971,7 @@ def train_stage_lm(model: Any,
         entry = {'step': step, 'damping': used_damping, 'cholesky_retries': retries,
                  'accepted': accepted, 'gain_ratio': float(gain), 'mspe_fit': mspe,
                  'sigma_fit': sigma, 'sigma_val': val_sigma, 'diag_ratio': diag_ratio,
+                 'n_zero_diag': n_zero,
                  'time_normal_s': time_normal, 'time_s': time.time() - t0}
         if step_record is not None: step_record.append(entry)
         if verbose:
