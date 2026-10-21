@@ -858,6 +858,7 @@ def train_stage_lm(model: Any,
                    params: Any,
                    batch_size: int = 2000,
                    damping: float = 1e-3,
+                   max_trials: int = 20,
                    patience: Optional[int] = None,
                    min_delta: float = 0.0,
                    val_dataset: Optional[Dict[str, jnp.ndarray]] = None,
@@ -870,39 +871,41 @@ def train_stage_lm(model: Any,
 
     The residual is r_i = sqrt(w_i) f_i, with w_i = mass_i / sum(mass) and f_i = eta_i - 1
     for the volume form normalized by its mean over the dataset. Each step sums J^T J and
-    J^T r over batches, with the change of the mean in J, and solves
-    (J^T J + damping diag(J^T J)) delta = -J^T r with a Cholesky factorization. If the
-    factorization fails, the damping grows by 10. A step is accepted only if the MSPE falls.
-    The damping follows the gain ratio rho, the actual over the predicted decrease of the
-    MSPE: an accepted step multiplies it by max(1/3, 1 - (2 rho - 1)^3), and a rejected step
-    by nu, which then doubles. A rejected step reuses J^T J. The dataset must hold
-    'cymetric', the restricted metric of the earlier stages.
+    J^T r over batches once, with the change of the mean in J. Then it solves
+    (J^T J + damping diag(J^T J)) delta = -J^T r with a Cholesky factorization, and it tries
+    the step. If the MSPE does not fall, the damping is multiplied by nu, nu doubles, and
+    the step tries again, up to max_trials times. If the factorization fails, the damping
+    grows by 10. After an accepted trial with the gain ratio rho, the actual over the
+    predicted decrease of the MSPE, the damping is multiplied by max(1/3, 1 - (2 rho - 1)^3)
+    and nu is 2. The dataset must hold 'cymetric', the restricted metric of the earlier stages.
 
     Args:
         model: Flax model of the correction potential of this stage.
         dataset: Data dictionary, 'cymetric' included.
-        epochs: Maximum number of LM steps, accepted or rejected.
+        epochs: Maximum number of LM steps. Each step computes J^T J once.
         params: Initial parameters.
         batch_size: Number of points in each batch of the sums.
         damping: Initial damping lambda.
+        max_trials: Maximum number of trials in a step. If no trial lowers the MSPE, LM stops.
         patience: If set, stop when the validation sigma (with no validation set, the MSPE)
             has not gone below (1 - min_delta) times its best earlier value for this number
             of steps.
         min_delta: Relative decrease that resets the patience count.
         val_dataset: Optional validation set with the keys of dataset. If set, sigma on it
-            is computed after each accepted step, and the function returns the parameters
-            with the lowest sigma (the initial parameters included).
+            is computed after each step, and the function returns the parameters with the
+            lowest sigma (the initial parameters included).
         val_batch_size: Batch size of the metric on the validation set.
-        step_record: Optional list. One dict for each step is appended to it: the damping,
-            the acceptance, the gain ratio, the MSPE and sigma on the dataset, the validation
-            sigma, the ratio of the largest to the smallest positive diagonal entry of J^T J,
-            the number of its zero diagonal entries, and the times.
+        step_record: Optional list. One dict for each step is appended to it: the damping of
+            the accepted trial, the number of trials, the gain ratio, the MSPE and sigma on
+            the dataset, the validation sigma, the ratio of the largest to the smallest
+            positive diagonal entry of J^T J, the number of its zero diagonal entries, and
+            the times.
         verbose: Whether to print progress.
         history: Optional list to append log messages to.
 
     Returns:
         (params with the lowest validation sigma, that sigma), or with no validation set
-        (the last accepted params, their MSPE).
+        (the last params, their MSPE).
     """
     theta, unravel = ravel_pytree(params)
     residual_fn = _make_stage_residual_fn(model, dataset, unravel, batch_size)
@@ -929,58 +932,62 @@ def train_stage_lm(model: Any,
         print(msg)
         if history is not None: history.append(msg)
 
-    jtj = None
     nu = 2.0
     for step in range(1, epochs + 1):
         t0 = time.time()
-        time_normal = 0.0
-        if jtj is None:
-            jtj, jtr = normal_fn(theta, f)
-            diag = jnp.diag(jtj)
-            n_zero = int(jnp.sum(diag <= 0))
-            diag_ratio = float(jnp.max(diag) / jnp.min(jnp.where(diag > 0, diag, jnp.inf)))
-            time_normal = time.time() - t0
+        jtj, jtr = normal_fn(theta, f)
+        diag = jnp.diag(jtj)
+        n_zero = int(jnp.sum(diag <= 0))
+        diag_ratio = float(jnp.max(diag) / jnp.min(jnp.where(diag > 0, diag, jnp.inf)))
+        time_normal = time.time() - t0
 
-        used_damping, retries = damping, 0
-        delta = _lm_delta(jtj, jtr, used_damping)
-        while not bool(jnp.all(jnp.isfinite(delta))) and retries < 30:
-            used_damping, retries = used_damping * 10.0, retries + 1
-            delta = _lm_delta(jtj, jtr, used_damping)
-        predicted = float(-2.0 * (delta @ jtr) - delta @ (jtj @ delta))
+        # The trials of the step: a larger damping after each trial that does not lower the MSPE.
+        accepted, trials, retries = False, 0, 0
+        while not accepted and trials < max_trials:
+            trials += 1
+            delta = _lm_delta(jtj, jtr, damping)
+            while not bool(jnp.all(jnp.isfinite(delta))) and retries < 30:
+                damping, retries = damping * 10.0, retries + 1
+                delta = _lm_delta(jtj, jtr, damping)
+            predicted = float(-2.0 * (delta @ jtr) - delta @ (jtj @ delta))
+            f_new = residual_fn(theta + delta)
+            mspe_new = float(jnp.sum(weights * f_new**2))
+            gain = (mspe - mspe_new) / predicted if predicted > 0 else -np.inf
+            accepted = bool(np.isfinite(mspe_new) and mspe_new < mspe)
+            used_damping = damping
+            if accepted:
+                theta, f, mspe = theta + delta, f_new, mspe_new
+                sigma = float(jnp.sum(weights * jnp.abs(f)))
+                # The rule of Nielsen; a gain ratio that is not finite keeps the damping.
+                factor = max(1.0 / 3.0, 1.0 - (2.0 * gain - 1.0)**3) if np.isfinite(gain) else 1.0
+                damping, nu = damping * factor, 2.0
+            else:
+                damping, nu = damping * nu, nu * 2.0
 
-        f_new = residual_fn(theta + delta)
-        mspe_new = float(jnp.sum(weights * f_new**2))
-        gain = (mspe - mspe_new) / predicted if predicted > 0 else -np.inf
-        accepted = bool(np.isfinite(mspe_new) and mspe_new < mspe)
-        if accepted:
-            theta, f, mspe = theta + delta, f_new, mspe_new
-            sigma = float(jnp.sum(weights * jnp.abs(f)))
-            jtj = None
-            # Nielsen's rule; a gain ratio that is not finite keeps the damping.
-            factor = max(1.0 / 3.0, 1.0 - (2.0 * gain - 1.0)**3) if np.isfinite(gain) else 1.0
-            damping = used_damping * factor
-            nu = 2.0
-            if val_fn is not None:
-                val_sigma = float(val_fn(unravel(theta)))
-                if val_sigma < best_val:
-                    best_theta, best_val = theta, val_sigma
-        else:
-            damping = used_damping * nu
-            nu *= 2.0
+        if accepted and val_fn is not None:
+            val_sigma = float(val_fn(unravel(theta)))
+            if val_sigma < best_val:
+                best_theta, best_val = theta, val_sigma
 
-        entry = {'step': step, 'damping': used_damping, 'cholesky_retries': retries,
+        entry = {'step': step, 'damping': used_damping, 'trials': trials, 'cholesky_retries': retries,
                  'accepted': accepted, 'gain_ratio': float(gain), 'mspe_fit': mspe,
                  'sigma_fit': sigma, 'sigma_val': val_sigma, 'diag_ratio': diag_ratio,
-                 'n_zero_diag': n_zero,
-                 'time_normal_s': time_normal, 'time_s': time.time() - t0}
+                 'n_zero_diag': n_zero, 'time_normal_s': time_normal, 'time_s': time.time() - t0}
         if step_record is not None: step_record.append(entry)
         if verbose:
             msg = (f"LM step {step}: MSPE = {mspe:.5e}, Sigma = {sigma:.5e}"
                    + (f", Val Sigma = {val_sigma:.5e}" if val_fn is not None else "")
-                   + f", lambda = {used_damping:.3e}, gain = {gain:.3e}, "
-                   + ("accepted" if accepted else "rejected") + f", {entry['time_s']:.1f}s")
+                   + f", lambda = {used_damping:.3e}, gain = {gain:.3e}, {trials} trials, "
+                   + f"{entry['time_s']:.1f}s")
             print(msg)
             if history is not None: history.append(msg)
+
+        if not accepted:
+            if verbose:
+                msg = f"Stopped at step {step}: no trial of {max_trials} lowers the MSPE"
+                print(msg)
+                if history is not None: history.append(msg)
+            break
 
         if plateau.update(val_sigma if val_fn is not None else mspe):
             if verbose:
