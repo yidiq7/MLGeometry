@@ -1,8 +1,11 @@
+import math
 from flax import linen as nn
+import jax
 import jax.numpy as jnp
+import numpy as np
 from MLGeometry import bihomoNN as bnn
 from MLGeometry import config
-from typing import Any, Callable, Optional, Sequence
+from typing import Any, Callable, Optional, Sequence, Tuple
 
 __all__ = ['Kahler_potential', 'zerolayer',
            'OuterProductNN_k2','OuterProductNN_k3','OuterProductNN_k4',
@@ -10,7 +13,8 @@ __all__ = ['Kahler_potential', 'zerolayer',
            'SpectralNetwork', 'SpectralLinearNetwork', 'SpectralSirenNetwork',
            'ScaledSineDense', 'SpectralWangLaiNetwork',
            'PolynomialBranch', 'PolynomialCorrection',
-           'calibrate_polynomial', 'reduced_potential_mean']
+           'calibrate_polynomial', 'reduced_potential_mean',
+           'recurrence_features', 'UnitRecurrence', 'calibrate_recurrence', 'recurrence_gram_error']
 
 # Helper activation
 def square_activation(x):
@@ -248,6 +252,202 @@ def reduced_potential_mean(phi_prev: Callable, k0: int, points: jnp.ndarray) -> 
     """Mean of phi_prev(z) - k0 log|z|^2 on the points, the phi_shift of PolynomialCorrection."""
     log_norm = jnp.log(jnp.sum(jnp.real(points * jnp.conj(points)), axis=-1))
     return float(jnp.mean(phi_prev(points) - k0 * log_norm))
+
+def recurrence_features(z: jnp.ndarray, phi_prev: Optional[Callable] = None, k0: int = 1,
+                        phi_shift: float = 0.0) -> jnp.ndarray:
+    """The d^2 real features of degree 0 of UnitRecurrence at the points z.
+
+    They are the real parts of z_a z_b_bar for a <= b and the imaginary parts for a < b. The
+    imaginary parts of the diagonal are zero, so they are left out. With phi_prev = None the
+    weight is 1 / |z|^2, the Fubini-Study weight. With phi_prev, the frozen potential of the
+    earlier stages in the class k0 H, the weight is
+    exp(-(phi_prev - k0 log|z|^2 - phi_shift) / k0) / |z|^2, which is exp(-phi_prev / k0) up to
+    the constant factor exp(phi_shift / k0): the base weight.
+
+    Args:
+        z: Complex array of shape (..., d).
+        phi_prev: Optional frozen potential, a function from (..., d) to (...).
+        k0: The class of phi_prev.
+        phi_shift: Constant that keeps the base weight near 1, from reduced_potential_mean.
+
+    Returns:
+        Real array of shape (..., d^2).
+    """
+    d = z.shape[-1]
+    zz = z[..., :, None] * jnp.conj(z[..., None, :])
+    rows, cols = np.triu_indices(d)
+    off = rows != cols
+    x = jnp.concatenate([jnp.real(zz[..., rows, cols]), jnp.imag(zz[..., rows[off], cols[off]])], axis=-1)
+    norm_sq = jnp.sum(jnp.real(z * jnp.conj(z)), axis=-1)
+    if phi_prev is None:
+        weight = 1.0 / norm_sq
+    else:
+        weight = jnp.exp(-(phi_prev(z) - k0 * jnp.log(norm_sq) - phi_shift) / k0) / norm_sq
+    return x * weight[..., None]
+
+class UnitRecurrence(nn.Module):
+    """The units of a learned recurrence of Vandermonde with Arnoldi type, and psi = sum_m c_m u_m.
+
+    The features x are those of recurrence_features. With u_0 = 1, level l + 1 forms the
+    products t = (x A_l^T) * (u_l B_l^T) and the units u_(l+1) = (t - U_l H_l) R_l^-1, with U_l
+    all units of the levels 0 to l. A_l (widths[l] x n_features), B_l (widths[l] x width of u_l)
+    and c are parameters. H_l and R_l^-1 are the fixed collection 'orth'. calibrate_recurrence
+    computes them, so that the units are orthonormal on the fit points in the mass-weighted
+    inner product. A unit of level l is a polynomial of degree l in x, so psi is a sum over the
+    degrees L of P_L(z) times the weight of the features to the power L, with P_L
+    bihomogeneous of degree (L, L). psi uses the units of the levels 1 to len(widths).
+    """
+    widths: Sequence[int]
+    n_features: int = 25
+    phi_prev: Optional[Callable] = None
+    k0: int = 1
+    phi_shift: float = 0.0
+
+    def setup(self):
+        sizes = [1] + [int(k) for k in self.widths]
+        n_before = np.cumsum(sizes)
+        levels = range(len(self.widths))
+        self.a = [self.param(f'A_{l}', nn.initializers.normal(stddev=1.0 / math.sqrt(self.n_features)),
+                             (sizes[l + 1], self.n_features), config.real_dtype) for l in levels]
+        self.b = [self.param(f'B_{l}', nn.initializers.normal(stddev=1.0 / math.sqrt(sizes[l])),
+                             (sizes[l + 1], sizes[l]), config.real_dtype) for l in levels]
+        self.c = self.param('c', nn.initializers.zeros, (int(sum(sizes[1:])),), config.real_dtype)
+        self.h = [self.variable('orth', f'H_{l}', jnp.zeros, (int(n_before[l]), sizes[l + 1]),
+                                config.real_dtype) for l in levels]
+        self.rinv = [self.variable('orth', f'Rinv_{l}', lambda n, dtype: jnp.eye(n, dtype=dtype),
+                                   sizes[l + 1], config.real_dtype) for l in levels]
+
+    def all_units(self, inputs: jnp.ndarray) -> jnp.ndarray:
+        """All units of the levels 0 to L at the points inputs, an array (..., 1 + sum(widths))."""
+        x = recurrence_features(inputs, self.phi_prev, self.k0, self.phi_shift)
+        units = jnp.ones(x.shape[:-1] + (1,), x.dtype)
+        last = units
+        for a, b, h, rinv in zip(self.a, self.b, self.h, self.rinv):
+            t = (x @ a.T) * (last @ b.T)
+            last = (t - units @ h.value) @ rinv.value
+            units = jnp.concatenate([units, last], axis=-1)
+        return units
+
+    def units(self, inputs: jnp.ndarray) -> jnp.ndarray:
+        """The units of the levels 1 to L at the points inputs, an array (..., sum(widths))."""
+        return self.all_units(inputs)[..., 1:]
+
+    def __call__(self, inputs: jnp.ndarray) -> jnp.ndarray:
+        return (self.units(inputs) @ self.c)[..., None]
+
+def _pivoted_cholesky(gram: np.ndarray, norms: np.ndarray, tol: float) -> Tuple[np.ndarray, np.ndarray]:
+    """Greedy pivoted Cholesky factor of a Gram matrix.
+
+    At each step the column with the largest remaining part relative to its norm enters, while
+    this relative part exceeds tol.
+
+    Returns:
+        (the indices of the entered columns in their order, the upper triangular R with
+        gram[sel][:, sel] = R^T R).
+    """
+    n = gram.shape[0]
+    d = np.diag(gram).astype(np.float64).copy()
+    scale = np.where(norms > 0, norms, 1.0)**2
+    perm = np.arange(n)
+    r = np.zeros((n, n))
+    k = 0
+    while k < n:
+        rel = d[perm[k:]] / scale[perm[k:]]
+        j = k + int(np.argmax(rel))
+        if not rel[j - k] > tol**2:
+            break
+        perm[[k, j]] = perm[[j, k]]
+        r[:k, [k, j]] = r[:k, [j, k]]
+        r[k, k] = np.sqrt(d[perm[k]])
+        rest = perm[k + 1:]
+        r[k, k + 1:] = (gram[perm[k], rest] - r[:k, k] @ r[:k, k + 1:]) / r[k, k]
+        d[rest] -= r[k, k + 1:]**2
+        k += 1
+    return perm[:k], r[:k, :k]
+
+def calibrate_recurrence(x: jnp.ndarray, weights: jnp.ndarray, width: int, degree: int,
+                         key: Optional[Any] = None, a_list: Optional[Sequence] = None,
+                         b_list: Optional[Sequence] = None, tol: float = 1e-6) -> dict:
+    """Orthonormalizes the products of UnitRecurrence level by level on the fit points.
+
+    Each level forms the products t = (x A^T) * (u B^T) of the last units u, takes out the
+    earlier units in two passes of block Gram-Schmidt, and orthonormalizes the rest with a
+    pivoted Cholesky factor of its Gram matrix and a second pass. With random matrices
+    (a_list = None), A and B are Gaussian with the variance 1 / fan-in, and a product enters
+    only if its new part exceeds tol times its norm, so a level can have fewer than `width`
+    units. With a_list and b_list, all products enter in their order.
+
+    Args:
+        x: Features at the fit points, an array (N, n_features).
+        weights: Mass weights of the fit points with the sum 1, an array (N,).
+        width: Number of products of each level of the random matrices.
+        degree: Number of levels.
+        key: PRNG key of the random matrices.
+        a_list, b_list: Optional matrices A_l and B_l of all levels.
+        tol: Smallest new part, relative to the norm of the product, that enters.
+
+    Returns:
+        A dict with 'widths' (the number of units of each level), 'variables' (the collections
+        'params' and 'orth' of UnitRecurrence, with c = 0) and 'new_parts' (for each level, the
+        new part of each product that entered, relative to its norm, in the order of entry).
+    """
+    wcol = weights[:, None]
+    n_features = x.shape[1]
+    units = jnp.ones((x.shape[0], 1), x.dtype)
+    last = units
+    params, orth, widths, new_parts = {}, {}, [], []
+    for l in range(degree):
+        if a_list is None:
+            key_a, key_b = jax.random.split(jax.random.fold_in(key, l))
+            a = jax.random.normal(key_a, (width, n_features), x.dtype) / math.sqrt(n_features)
+            b = jax.random.normal(key_b, (width, last.shape[1]), x.dtype) / math.sqrt(last.shape[1])
+        else:
+            a, b = jnp.asarray(a_list[l]), jnp.asarray(b_list[l])
+        t = (x @ a.T) * (last @ b.T)
+        norms = jnp.sqrt(jnp.sum(wcol * t**2, axis=0))
+        h1 = units.T @ (wcol * t)
+        t = t - units @ h1
+        h2 = units.T @ (wcol * t)
+        t = t - units @ h2
+        gram = np.asarray(t.T @ (wcol * t))
+        if a_list is None:
+            sel, r1 = _pivoted_cholesky(gram, np.asarray(norms), tol)
+        else:
+            sel = np.arange(t.shape[1])
+            r1 = np.linalg.cholesky(gram).T
+        r1 = jnp.asarray(r1)
+        # q = t_sel R1^-1, then a second pass against the earlier units and within the level.
+        q = jax.scipy.linalg.solve_triangular(r1, t[:, sel].T, trans='T', lower=False).T
+        h3 = units.T @ (wcol * q)
+        q = q - units @ h3
+        r2 = jnp.linalg.cholesky(q.T @ (wcol * q)).T
+        q = jax.scipy.linalg.solve_triangular(r2, q.T, trans='T', lower=False).T
+        # The units at any point: (t_sel - U H) R^-1 with H = (h1 + h2)_sel + h3 R1 and R = R2 R1.
+        r = r2 @ r1
+        params[f'A_{l}'], params[f'B_{l}'] = a[sel], b[sel]
+        orth[f'H_{l}'] = (h1 + h2)[:, sel] + h3 @ r1
+        orth[f'Rinv_{l}'] = jax.scipy.linalg.solve_triangular(r, jnp.eye(r.shape[0], dtype=r.dtype), lower=False)
+        widths.append(int(len(sel)))
+        new_parts.append(np.asarray(jnp.diag(r1)) / np.asarray(norms)[sel])
+        units = jnp.concatenate([units, q], axis=1)
+        last = q
+    params['c'] = jnp.zeros(units.shape[1] - 1, x.dtype)
+    return {'widths': widths, 'variables': {'params': params, 'orth': orth}, 'new_parts': new_parts}
+
+def recurrence_gram_error(model: UnitRecurrence, variables: Any, points: jnp.ndarray, mass: jnp.ndarray,
+                          batch_size: int = 10000) -> float:
+    """max abs(U^T W U - I) of all units of the levels 0 to L on the points, with W = mass / sum(mass)."""
+    weights = mass / jnp.sum(mass)
+
+    @jax.jit
+    def gram_of(variables, z, w):
+        u = model.apply(variables, z, method=UnitRecurrence.all_units)
+        return u.T @ (w[:, None] * u)
+
+    gram = 0.0
+    for i in range(0, points.shape[0], batch_size):
+        gram = gram + gram_of(variables, points[i:i + batch_size], weights[i:i + batch_size])
+    return float(jnp.max(jnp.abs(gram - jnp.eye(gram.shape[0], dtype=gram.dtype))))
 
 class zerolayer(nn.Module):
     n_units: Sequence[int] # Not used but for consistency with interface

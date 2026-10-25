@@ -49,6 +49,18 @@
   linear output amp * (h w) with no sinh and no bias, and the driver options
   `--network tanh_linear`, `--init_params`, `--output_solves`, `--lm_steps`,
   `--lm_patience`, `--lm_min_delta`, `--lm_damping` and `--lm_batch_size`
+- `solve_stage_units` and `train_stage_varpro` in `trainer`. `solve_stage_units` solves the
+  coefficients c of a potential psi = units(z) @ c exactly. The rows of J come from second
+  derivatives of the units along three directions at each point, so no Hessian of all units
+  is stored. `train_stage_varpro` runs Levenberg-Marquardt on the other parameters of such a
+  potential, and computes the fixed maps and c again after each accepted step (variable
+  projection)
+- The units of a learned recurrence in `training/models.py`: `recurrence_features` (the
+  d^2 real features z_a z_b_bar of degree 0 with the base weight or the Fubini-Study weight),
+  `UnitRecurrence` (products t = (x A^T) * (u B^T) of the last units, orthonormalized against
+  all earlier units with fixed maps, and psi = sum c u), `calibrate_recurrence` (the maps on
+  the fit points) and `recurrence_gram_error`. The driver `training/recurrence_stage.py` and
+  its loop `training/recurrence_stage.sh`
 
 ## [2.2.2] - 2026-08-10
 
