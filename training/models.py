@@ -480,14 +480,21 @@ def monomials(z: jnp.ndarray, exponents: np.ndarray) -> jnp.ndarray:
         Complex array of shape (..., n_mon).
     """
     exponents = np.asarray(exponents)
-    powers = [jnp.ones_like(z)]
-    for _ in range(int(exponents.max())):
-        powers.append(powers[-1] * z)
-    powers = jnp.stack(powers, axis=-1)
-    result = powers[..., 0, :][..., exponents[:, 0]]
-    for j in range(1, exponents.shape[1]):
-        result = result * powers[..., j, :][..., exponents[:, j]]
-    return result
+    # Static slices and products only, so that the derivatives need no gather or scatter.
+    powers = []
+    for j in range(exponents.shape[1]):
+        p = [jnp.ones_like(z[..., j])]
+        for _ in range(int(exponents.max())):
+            p.append(p[-1] * z[..., j])
+        powers.append(p)
+    terms = []
+    for row in exponents:
+        term = powers[0][int(row[0])]
+        for j in range(1, len(row)):
+            if row[j] > 0:
+                term = term * powers[j][int(row[j])]
+        terms.append(term)
+    return jnp.stack(terms, axis=-1)
 
 def make_sections(exponents: np.ndarray, transform: np.ndarray) -> Callable:
     """The function z -> sigma(z) = (m(z) @ transform) / |z|^k of the sections of one degree k.
@@ -534,10 +541,14 @@ def hermitian_units(sigma: jnp.ndarray) -> jnp.ndarray:
         Real array of shape (..., n^2).
     """
     n = sigma.shape[-1]
-    rows, cols = np.triu_indices(n)
-    off = rows != cols
-    prod = jnp.conj(sigma[..., rows]) * sigma[..., cols]
-    return jnp.concatenate([jnp.real(prod), jnp.imag(prod[..., off])], axis=-1)
+    conj = jnp.conj(sigma)
+    re_parts, im_parts = [], []
+    # Static slices of each row a, so that the derivatives need no scatter.
+    for a in range(n):
+        prod = conj[..., a:a + 1] * sigma[..., a:]
+        re_parts.append(jnp.real(prod))
+        im_parts.append(jnp.imag(prod[..., 1:]))
+    return jnp.concatenate(re_parts + im_parts, axis=-1)
 
 def hermitian_coefficients(matrix: np.ndarray) -> np.ndarray:
     """The real coefficients c of a Hermitian matrix C, with sigma^H C sigma = hermitian_units(sigma) @ c.
