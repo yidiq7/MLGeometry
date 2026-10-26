@@ -22,7 +22,9 @@ Fits potentials on the full bases of sections of low degree, with no symmetry.
     exactly with solve_stage_units, with w_L = p_0^(-L / k_b) (--weight base) or 1 (--weight
     fs). The solves repeat until the MSPE of the fit set changes by not more than --solve_rtol
     of its value, at most --max_solves times. For a single level, --ranks truncates C_L to the
-    eigenvalues of the largest modulus and gives sigma with no new fit.
+    eigenvalues of the largest modulus and gives sigma with no new fit. With the base weight,
+    it also truncates C_L - alpha K: sigma^H K sigma is the lift of p_0^(L / k_b), so
+    w_L sigma^H K sigma is almost constant, and alpha (the projection of C_L on K) keeps it.
 
 After each fit, the eigenvalues of J^T J at the result give cond(J), with and without the
 scale of the columns. Eigenvalues below --null_tol times the largest one count as null
@@ -431,20 +433,37 @@ def task_correction(args, sets: dict, summary: dict, write_summary):
 
     if args.ranks and len(args.levels) == 1:
         n = stage['n_sections'][0]
-        matrix = hermitian_matrix(np.asarray(params['params']['c']), n)
-        lam, vec = np.linalg.eigh(matrix)
-        order = np.argsort(-np.abs(lam))
+        full = hermitian_matrix(np.asarray(params['params']['c']), n)
+        # 'C': C itself. 'C - alpha K': with the base weight, sigma^H K sigma is the fit of p_0^(L / k0),
+        # so its form is almost constant; alpha K (one number) stays and the rest is truncated.
+        variants = {'C': (full, 0.0, None)}
+        if density is not None:
+            exponent = args.levels[0] / base_meta['degree']
+            h_const, const_info = lift_coefficients(level_sections[0][0], lambda z: density(z)**exponent,
+                                                    sets['fit'], args.batch_size)
+            const = hermitian_matrix(np.asarray(h_const), n)
+            alpha = float(np.real(np.vdot(const, full)) / np.real(np.vdot(const, const)))
+            variants['C - alpha K'] = (full - alpha * const, alpha, const)
+            stage['constant_form'] = dict(const_info, alpha=alpha,
+                                          frobenius_ratio=float(np.linalg.norm(alpha * const) / np.linalg.norm(full)))
+            print(f"alpha = {alpha:.6e}; norm of alpha K over norm of C {stage['constant_form']['frobenius_ratio']:.6f}")
         eval_sets = {name: sets[name] for name in ('validation', 'holdout')}
-        rows = []
-        for rank in args.ranks:
-            keep = order[:rank]
-            truncated = (vec[:, keep] * lam[keep]) @ vec[:, keep].conj().T
-            p_rank = {'params': {'c': jnp.asarray(hermitian_coefficients(truncated), mlg.config.real_dtype)}}
-            rows.append({'rank': rank, 'n_real_params': rank * (2 * n - rank),
-                         'eval': evaluate_sets(metric_fn, p_rank, eval_sets, f'rank {rank}')})
-        stage['ranks'] = {'abs_eigenvalues': [float(x) for x in np.abs(lam[order])],
-                          'signs': [int(x) for x in np.sign(lam[order])], 'rows': rows}
-        write_summary()
+        stage['ranks'] = {}
+        for name, (matrix, alpha, const) in variants.items():
+            lam, vec = np.linalg.eigh(matrix)
+            order = np.argsort(-np.abs(lam))
+            rows = []
+            for rank in args.ranks:
+                keep = order[:rank]
+                truncated = (vec[:, keep] * lam[keep]) @ vec[:, keep].conj().T
+                if const is not None:
+                    truncated = truncated + alpha * const
+                p_rank = {'params': {'c': jnp.asarray(hermitian_coefficients(truncated), mlg.config.real_dtype)}}
+                rows.append({'rank': rank, 'n_real_params': rank * (2 * n - rank) + (0 if const is None else 1),
+                             'eval': evaluate_sets(metric_fn, p_rank, eval_sets, f'{name}, rank {rank}')})
+            stage['ranks'][name] = {'abs_eigenvalues': [float(x) for x in np.abs(lam[order])],
+                                    'signs': [int(x) for x in np.sign(lam[order])], 'rows': rows}
+            write_summary()
 
 
 # --- Main ---
