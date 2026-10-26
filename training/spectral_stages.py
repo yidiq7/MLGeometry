@@ -24,6 +24,9 @@ The networks of --network:
     bihom  Kahler_potential: log of a bihomogeneous network, a full potential with no FS
            base (use --base none). Its class is k0 H with k0 = 2^len(layers).
 
+A loaded stage (--load_dir) can also be the HN potential of training/full_basis.py --task hn
+(network 'hn' in its stage1.json, with the base 'none').
+
 After Adam, --output_solves solves the linear output layer of tanh_linear exactly, with the
 hidden layers fixed, and --lm_steps then runs Levenberg-Marquardt (LM) on all parameters,
 full batch on MSPE. Each loss in --lbfgs_losses gives one L-BFGS run from the result of the
@@ -56,7 +59,7 @@ import optax
 import MLGeometry as mlg
 from models import (SpectralNetwork, SpectralLinearNetwork, SpectralSirenNetwork, SpectralWangLaiNetwork,
                     PolynomialCorrection, Kahler_potential, zerolayer, calibrate_polynomial,
-                    reduced_potential_mean)
+                    reduced_potential_mean, HNPotential, load_sections)
 
 
 LOSSES = {
@@ -262,6 +265,9 @@ def build_model(meta: dict, d: int, phi_prev=None):
                                     phi_shift=meta.get('phi_shift', 0.0), d=d)
     if network == 'bihom':
         return Kahler_potential(layers=meta['layers'], d=d)
+    if network == 'hn':
+        sections, n_sections = load_sections(meta['sections'], meta['degree'])
+        return HNPotential(sections=sections, n_sections=n_sections, degree=meta['degree'], k0=meta['k0'])
     return SpectralNetwork(layers=meta['layers'], amp=meta['amp'], out_std=meta.get('out_std'), d=d)
 
 

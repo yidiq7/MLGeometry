@@ -61,6 +61,20 @@
   all earlier units with fixed maps, and psi = sum c u), `calibrate_recurrence` (the maps on
   the fit points) and `recurrence_gram_error`. The driver `training/recurrence_stage.py` and
   its loop `training/recurrence_stage.sh`
+- `stage_normal_equations` in `trainer`. It gives J^T J and J^T r of the MSPE of a stage for
+  all parameters, with the rows of `train_stage_lm`, so that the eigenvalues give cond(J)
+- The option `rtol` of `solve_stage_units`. The solves stop after the first one that changes
+  the MSPE by not more than rtol times its value
+- The full bases of sections in `training/models.py`: `monomial_exponents` and `monomials` (all
+  monomials of one degree), `make_sections` and `load_sections` (sections m(z) T / |z|^k with a
+  fixed map T), `hermitian_units`, `hermitian_coefficients`, `hermitian_matrix` and
+  `identity_coefficients` (the real basis Re and Im of conj(sigma_a) sigma_b of the Hermitian
+  forms), `HNPotential` (the HN potential (k0 / k) log(sigma^H H sigma) + k0 log|z|^2) and
+  `HermitianCorrection` (psi = sum_L w_L sigma_L^H C_L sigma_L with the base weight or the
+  Fubini-Study weight, linear in its coefficients). The driver `training/full_basis.py` (the
+  orthonormal sections by a pivoted QR factorization, HN by LM, the exact solve of a correction
+  and its truncation to a rank) and its loop `training/full_basis.sh`.
+  `training/spectral_stages.py` can load an HN potential as the base of a stage
 
 ## [2.2.2] - 2026-08-10
 

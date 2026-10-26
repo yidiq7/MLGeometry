@@ -1,3 +1,4 @@
+import itertools
 import math
 from flax import linen as nn
 import jax
@@ -14,7 +15,10 @@ __all__ = ['Kahler_potential', 'zerolayer',
            'ScaledSineDense', 'SpectralWangLaiNetwork',
            'PolynomialBranch', 'PolynomialCorrection',
            'calibrate_polynomial', 'reduced_potential_mean',
-           'recurrence_features', 'UnitRecurrence', 'calibrate_recurrence', 'recurrence_gram_error']
+           'recurrence_features', 'UnitRecurrence', 'calibrate_recurrence', 'recurrence_gram_error',
+           'monomial_exponents', 'monomials', 'make_sections', 'load_sections',
+           'hermitian_units', 'hermitian_coefficients', 'hermitian_matrix', 'identity_coefficients',
+           'HNPotential', 'HermitianCorrection']
 
 # Helper activation
 def square_activation(x):
@@ -448,6 +452,186 @@ def recurrence_gram_error(model: UnitRecurrence, variables: Any, points: jnp.nda
     for i in range(0, points.shape[0], batch_size):
         gram = gram + gram_of(variables, points[i:i + batch_size], weights[i:i + batch_size])
     return float(jnp.max(jnp.abs(gram - jnp.eye(gram.shape[0], dtype=gram.dtype))))
+
+def monomial_exponents(degree: int, d: int = 5) -> np.ndarray:
+    """The exponents of all monomials of degree `degree` in d variables.
+
+    The order is that of itertools.combinations_with_replacement, so it does not depend on
+    the points.
+
+    Returns:
+        Integer array of shape (C(degree + d - 1, d - 1), d).
+    """
+    rows = [np.bincount(np.asarray(combo, dtype=np.int64), minlength=d)
+            for combo in itertools.combinations_with_replacement(range(d), degree)]
+    return np.asarray(rows, dtype=np.int64)
+
+def monomials(z: jnp.ndarray, exponents: np.ndarray) -> jnp.ndarray:
+    """The monomials z^A for the rows A of exponents.
+
+    The powers of each coordinate come from repeated products, so the values and the
+    derivatives stay exact products also where a coordinate is small.
+
+    Args:
+        z: Complex array of shape (..., d).
+        exponents: Integer array of shape (n_mon, d).
+
+    Returns:
+        Complex array of shape (..., n_mon).
+    """
+    exponents = np.asarray(exponents)
+    powers = [jnp.ones_like(z)]
+    for _ in range(int(exponents.max())):
+        powers.append(powers[-1] * z)
+    powers = jnp.stack(powers, axis=-1)
+    result = powers[..., 0, :][..., exponents[:, 0]]
+    for j in range(1, exponents.shape[1]):
+        result = result * powers[..., j, :][..., exponents[:, j]]
+    return result
+
+def make_sections(exponents: np.ndarray, transform: np.ndarray) -> Callable:
+    """The function z -> sigma(z) = (m(z) @ transform) / |z|^k of the sections of one degree k.
+
+    m(z) holds the monomials of `exponents`, all of degree k. So sigma has degree 0, and the
+    same linear map acts at all points.
+
+    Args:
+        exponents: Integer array of shape (n_mon, d).
+        transform: Complex array of shape (n_mon, n).
+
+    Returns:
+        A function from a complex array (..., d) to a complex array (..., n).
+    """
+    exponents = np.asarray(exponents)
+    degree = int(exponents[0].sum())
+    transform = jnp.asarray(transform, dtype=config.complex_dtype)
+
+    def sections(z):
+        norm_sq = jnp.sum(jnp.real(z * jnp.conj(z)), axis=-1, keepdims=True)
+        return (monomials(z, exponents) @ transform) / norm_sq**(0.5 * degree)
+    return sections
+
+def load_sections(path: str, degree: int) -> Tuple[Callable, int]:
+    """The sections of one degree from the .npz file of training/full_basis.py --task sections.
+
+    Returns:
+        (the function of make_sections, the number of sections).
+    """
+    with np.load(path) as data:
+        exponents, transform = data[f'exponents_{degree}'], data[f'transform_{degree}']
+    return make_sections(exponents, transform), int(transform.shape[1])
+
+def hermitian_units(sigma: jnp.ndarray) -> jnp.ndarray:
+    """The n^2 real products Re(conj(sigma_a) sigma_b) for a <= b and Im(conj(sigma_a) sigma_b) for a < b.
+
+    The pairs (a, b) are in the order of np.triu_indices(n). For a Hermitian C,
+    sigma^H C sigma = hermitian_units(sigma) @ hermitian_coefficients(C).
+
+    Args:
+        sigma: Complex array of shape (..., n).
+
+    Returns:
+        Real array of shape (..., n^2).
+    """
+    n = sigma.shape[-1]
+    rows, cols = np.triu_indices(n)
+    off = rows != cols
+    prod = jnp.conj(sigma[..., rows]) * sigma[..., cols]
+    return jnp.concatenate([jnp.real(prod), jnp.imag(prod[..., off])], axis=-1)
+
+def hermitian_coefficients(matrix: np.ndarray) -> np.ndarray:
+    """The real coefficients c of a Hermitian matrix C, with sigma^H C sigma = hermitian_units(sigma) @ c.
+
+    The coefficient of Re(conj(sigma_a) sigma_b) is C_aa on the diagonal and 2 Re(C_ab) for a < b.
+    The coefficient of Im(conj(sigma_a) sigma_b) is -2 Im(C_ab).
+    """
+    matrix = np.asarray(matrix)
+    n = matrix.shape[0]
+    rows, cols = np.triu_indices(n)
+    off = rows != cols
+    upper = matrix[rows, cols]
+    c_re = np.where(off, 2.0 * upper.real, upper.real)
+    c_im = -2.0 * upper[off].imag
+    return np.concatenate([c_re, c_im])
+
+def hermitian_matrix(coefficients: np.ndarray, n: int) -> np.ndarray:
+    """The Hermitian n x n matrix C of the real coefficients of hermitian_coefficients."""
+    coefficients = np.asarray(coefficients)
+    rows, cols = np.triu_indices(n)
+    off = rows != cols
+    c_re, c_im = coefficients[:rows.size], coefficients[rows.size:]
+    matrix = np.zeros((n, n), dtype=np.complex128)
+    matrix[rows, cols] = np.where(off, 0.5 * c_re, c_re)
+    matrix[rows[off], cols[off]] -= 0.5j * c_im
+    return matrix + np.conj(np.triu(matrix, 1)).T
+
+def identity_coefficients(n: int) -> np.ndarray:
+    """The real coefficients of hermitian_coefficients for the identity matrix of size n."""
+    rows, cols = np.triu_indices(n)
+    c = np.zeros(n * n)
+    c[np.nonzero(rows == cols)[0]] = 1.0
+    return c
+
+class HNPotential(nn.Module):
+    """The algebraic potential Phi = (k0 / degree) log(sigma^H H sigma) + k0 log|z|^2.
+
+    sigma are the sections of make_sections of the degree `degree`, divided by |z|^degree. So
+    Phi = (k0 / degree) log(s^H H s) for the polynomial sections s, a potential in the class
+    k0 H. H is Hermitian, with the real coefficients h of hermitian_coefficients, so that
+    sigma^H H sigma = hermitian_units(sigma) @ h. h starts at H = I.
+    """
+    sections: Callable
+    n_sections: int
+    degree: int
+    k0: int
+
+    def setup(self):
+        n = self.n_sections
+        self.h = self.param('h', lambda key, shape, dtype: jnp.asarray(identity_coefficients(n), dtype),
+                            (n * n,), config.real_dtype)
+
+    def density(self, inputs: jnp.ndarray) -> jnp.ndarray:
+        """sigma^H H sigma at the points, a real array (...). It has degree 0."""
+        return hermitian_units(self.sections(inputs)) @ self.h
+
+    def __call__(self, inputs: jnp.ndarray) -> jnp.ndarray:
+        log_norm = jnp.log(jnp.sum(jnp.real(inputs * jnp.conj(inputs)), axis=-1))
+        phi = (self.k0 / self.degree) * jnp.log(self.density(inputs)) + self.k0 * log_norm
+        return phi[..., None]
+
+class HermitianCorrection(nn.Module):
+    """A correction psi = sum_L w_L(z) sigma_L^H C_L sigma_L, linear in the real coefficients c.
+
+    Level L has the sections sigma_L of make_sections, divided by |z|^L, and a Hermitian C_L
+    with the real coefficients of hermitian_coefficients. With density = None, w_L = 1: this is
+    the Fubini-Study weight. With density p, the frozen sigma^H H sigma of an HN base of degree
+    k0 divided by a constant, w_L = p^(-L / k0): then psi = sum_L N_L(z) exp(-(L / k0) Phi_0) up to
+    a constant factor of each level, with N_L = s_L^H C_L s_L. This is the base weight. c holds
+    the levels one after the other and starts at zero.
+    """
+    sections: Sequence[Callable]
+    n_sections: Sequence[int]
+    degrees: Sequence[int]
+    density: Optional[Callable] = None
+    k0: int = 1
+
+    def setup(self):
+        self.c = self.param('c', nn.initializers.zeros, (int(sum(n * n for n in self.n_sections)),),
+                            config.real_dtype)
+
+    def units(self, inputs: jnp.ndarray) -> jnp.ndarray:
+        """The units w_L hermitian_units(sigma_L) of all levels at the points, a real array (..., M)."""
+        log_density = None if self.density is None else jnp.log(self.density(inputs))
+        parts = []
+        for sections, degree in zip(self.sections, self.degrees):
+            u = hermitian_units(sections(inputs))
+            if log_density is not None:
+                u = u * jnp.exp(-(degree / self.k0) * log_density)[..., None]
+            parts.append(u)
+        return jnp.concatenate(parts, axis=-1)
+
+    def __call__(self, inputs: jnp.ndarray) -> jnp.ndarray:
+        return (self.units(inputs) @ self.c)[..., None]
 
 class zerolayer(nn.Module):
     n_units: Sequence[int] # Not used but for consistency with interface

@@ -16,8 +16,8 @@ from . import complex_math
 from . import config
 
 __all__ = ['train_optax', 'train_lbfgs', 'train_stage_optax', 'train_stage_lbfgs',
-           'solve_stage_output', 'train_stage_lm', 'solve_stage_units', 'train_stage_varpro',
-           'init_params']
+           'solve_stage_output', 'train_stage_lm', 'stage_normal_equations', 'solve_stage_units',
+           'train_stage_varpro', 'init_params']
 
 
 def init_params(model: Any, input_shape: Sequence[int], seed: int = 42) -> Any:
@@ -1021,6 +1021,38 @@ def train_stage_lm(model: Any,
     return unravel(theta), mspe
 
 
+def stage_normal_equations(model: Any,
+                           dataset: Dict[str, jnp.ndarray],
+                           params: Any,
+                           batch_size: int = 2000) -> Tuple[jnp.ndarray, jnp.ndarray, jnp.ndarray]:
+    """
+    Computes J^T J and J^T r of the MSPE of one stage at params, for all parameters.
+
+    The residual and the rows of J are those of train_stage_lm: r_i = sqrt(w_i) f_i, and the
+    row of J at point i is sqrt(w_i) (1 + f_i) (a_i - a_bar), with a_i the gradient of
+    log det g_i and a_bar the change of the mean of the volume form. The eigenvalues of
+    J^T J give cond(J). The dataset must hold 'cymetric', the restricted metric of the
+    earlier stages.
+
+    Args:
+        model: Flax model of the correction potential of this stage.
+        dataset: Data dictionary, 'cymetric' included.
+        params: Parameters of the model.
+        batch_size: Number of points in each batch of the sums.
+
+    Returns:
+        (J^T J, J^T r, f), with f_i = eta_i - 1 at each point of the dataset.
+    """
+    theta, unravel = ravel_pytree(params)
+
+    def to_params(x, aux):
+        return unravel(x)
+
+    f = _make_stage_residual_fn(model, dataset, to_params, batch_size)(theta)
+    jtj, jtr = _make_stage_normal_fn(model, dataset, to_params, batch_size)(theta, f)
+    return jtj, jtr, f
+
+
 # --- Potentials linear in fixed units ---
 
 class _UnitsSolver:
@@ -1093,8 +1125,12 @@ class _UnitsSolver:
 
     def solve(self, params: Any, solves: int, val_fn: Optional[Callable] = None,
               step_record: Optional[list] = None, verbose: bool = True,
-              history: Optional[list] = None) -> Tuple[Any, float]:
-        """Runs the solves from params. Returns (params after the last solve, their MSPE)."""
+              history: Optional[list] = None, rtol: Optional[float] = None) -> Tuple[Any, float]:
+        """Runs the solves from params. Returns (params after the last solve, their MSPE).
+
+        With rtol, the solves stop after the first one that changes the MSPE by not more than
+        rtol times its value before that solve.
+        """
         theta, unravel = ravel_pytree(params)
         index = _leaf_index(params, self.output_name)
         metric_b, f = self.residual(params)
@@ -1116,6 +1152,7 @@ class _UnitsSolver:
         report(0, None, None, 0.0)
         for k in range(1, solves + 1):
             t0 = time.time()
+            mspe_before = float(jnp.sum(self.weights * f**2))
             jtj, jtr = self._normal(params, metric_b, f, self.batched, self.w_batched)
             # The eigenvalues of J^T J give cond(J); directions below 1e-15 of the largest are dropped.
             evals, evecs = jnp.linalg.eigh(jtj)
@@ -1127,6 +1164,9 @@ class _UnitsSolver:
             params = unravel(theta)
             metric_b, f = self.residual(params)
             report(k, cond, int(jnp.sum(~keep)), time.time() - t0)
+            mspe_after = float(jnp.sum(self.weights * f**2))
+            if rtol is not None and abs(mspe_before - mspe_after) <= rtol * mspe_before:
+                break
         return params, float(jnp.sum(self.weights * f**2))
 
 
@@ -1141,7 +1181,8 @@ def solve_stage_units(model: Any,
                       val_batch_size: Optional[int] = 10000,
                       step_record: Optional[list] = None,
                       verbose: bool = True,
-                      history: Optional[list] = None) -> Tuple[Any, float]:
+                      history: Optional[list] = None,
+                      rtol: Optional[float] = None) -> Tuple[Any, float]:
     """
     Solves the coefficients c of a potential psi = units(z) @ c exactly, with the units fixed.
 
@@ -1169,6 +1210,8 @@ def solve_stage_units(model: Any,
             directions and the time.
         verbose: Whether to print progress.
         history: Optional list to append log messages to.
+        rtol: If set, stop after the first solve that changes the MSPE on the dataset by not
+            more than rtol times its value before that solve. Then `solves` is the maximum.
 
     Returns:
         (params after the last solve, their MSPE on the dataset).
@@ -1176,7 +1219,7 @@ def solve_stage_units(model: Any,
     start_time = time.time()
     solver = _UnitsSolver(model, dataset, units_method, output_name, batch_size)
     val_fn = _make_validation_fn(model, val_dataset, val_batch_size)
-    result = solver.solve(params, solves, val_fn, step_record, verbose, history)
+    result = solver.solve(params, solves, val_fn, step_record, verbose, history, rtol=rtol)
     if verbose:
         msg = f"Solves finished in {time.time() - start_time:.2f}s."
         print(msg)
